@@ -67,6 +67,10 @@ import invesalius.utils as utils
 from invesalius import inv_paths
 from invesalius.pubsub import pub as Publisher
 
+# Import the enhanced error handling and logging system
+import invesalius.error_handling
+import invesalius.enhanced_logging
+
 FS_ENCODE = sys.getfilesystemencoding()
 LANG = None
 
@@ -120,7 +124,11 @@ class InVesalius(wx.App):
         self.SetTopWindow(self.frame)
         self.frame.Show()
         self.frame.Raise()
-        # logger = log.MyLogger()
+        
+        # Initialize the enhanced logging system
+        invesalius.enhanced_logging.register_menu_handler()
+        
+        # Initialize the legacy logging system for backward compatibility
         log.invLogger.configureLogging()
 
 

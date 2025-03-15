@@ -709,6 +709,9 @@ class Frame(wx.Frame):
         elif id == const.ID_PLUGINS_SHOW_PATH:
             self.ShowPluginsFolder()
 
+        elif id == wx.ID_ANY:
+            self.OnShowLogViewer(evt)
+
     def OnDbsMode(self):
         st = self.actived_dbs_mode.IsChecked()
         Publisher.sendMessage("Hide target button")
@@ -1064,6 +1067,16 @@ class Frame(wx.Frame):
             subprocess.Popen(["open", path])
         else:
             subprocess.Popen(["xdg-open", path])
+
+    def OnShowLogViewer(self, evt):
+        """Show the log viewer."""
+        from invesalius import enhanced_logging
+        enhanced_logging.show_log_viewer(self)
+        
+    def OnRunErrorHandlingTests(self, evt):
+        """Run the error handling tests."""
+        from invesalius import test_error_handling
+        test_error_handling.run_tests(self)
 
 
 # ------------------------------------------------------------------

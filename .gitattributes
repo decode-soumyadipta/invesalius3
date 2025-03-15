@@ -4,3 +4,6 @@
 *.ico binary
 *.bmp binary
 *.inv3 binary
+
+plugins/** -diff
+plugins/ -diff

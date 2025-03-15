@@ -154,9 +154,13 @@ class InMemoryHandler(logging.Handler):
     
     def emit(self, record: logging.LogRecord) -> None:
         """Emit a record."""
-        self.records.append(LogRecord.from_record(record))
-        if len(self.records) > self.capacity:
-            self.records.pop(0)
+        try:
+            log_record = LogRecord.from_record(record)
+            self.records.append(log_record)
+            if len(self.records) > self.capacity:
+                self.records.pop(0)
+        except Exception:
+            self.handleError(record)
     
     def get_records(self, level: Optional[str] = None) -> List[LogRecord]:
         """Get records, optionally filtered by level."""
@@ -187,261 +191,42 @@ class LogViewerFrame(wx.Frame):
         
         self.in_memory_handler = in_memory_handler
         
-        # Create the UI
-        self._create_ui()
+        # Create a simple UI for testing
+        panel = wx.Panel(self)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        # Add a text control to display logs
+        self.log_text = wx.TextCtrl(
+            panel,
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL
+        )
+        sizer.Add(self.log_text, 1, wx.EXPAND | wx.ALL, 5)
+        
+        # Add a refresh button
+        refresh_button = wx.Button(panel, label=_("Refresh"))
+        refresh_button.Bind(wx.EVT_BUTTON, self._on_refresh)
+        sizer.Add(refresh_button, 0, wx.ALL, 5)
+        
+        panel.SetSizer(sizer)
+        
+        # Populate the text control with logs
+        self._populate_logs()
         
         # Center the frame on the screen
         self.Centre()
-        
-        # Bind events
-        self.Bind(wx.EVT_CLOSE, self._on_close)
-        
-        # Set up a timer to refresh the log view
-        self.timer = wx.Timer(self)
-        self.Bind(wx.EVT_TIMER, self._on_timer, self.timer)
-        self.timer.Start(1000)  # Refresh every second
     
-    def _create_ui(self) -> None:
-        """Create the UI."""
-        # Create the main panel
-        panel = wx.Panel(self)
+    def _populate_logs(self):
+        """Populate the text control with logs."""
+        # Clear the text control
+        self.log_text.Clear()
         
-        # Create the main sizer
-        main_sizer = wx.BoxSizer(wx.VERTICAL)
-        
-        # Create the toolbar
-        toolbar_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        
-        # Add the level filter
-        level_label = wx.StaticText(panel, label=_("Level:"))
-        toolbar_sizer.Add(level_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
-        
-        self.level_choice = wx.Choice(
-            panel,
-            choices=["ALL", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-        )
-        self.level_choice.SetSelection(0)
-        self.level_choice.Bind(wx.EVT_CHOICE, self._on_level_changed)
-        toolbar_sizer.Add(self.level_choice, 0, wx.ALL, 5)
-        
-        # Add a spacer
-        toolbar_sizer.Add((0, 0), 1, wx.EXPAND)
-        
-        # Add the refresh button
-        refresh_button = wx.Button(panel, label=_("Refresh"))
-        refresh_button.Bind(wx.EVT_BUTTON, self._on_refresh)
-        toolbar_sizer.Add(refresh_button, 0, wx.ALL, 5)
-        
-        # Add the clear button
-        clear_button = wx.Button(panel, label=_("Clear"))
-        clear_button.Bind(wx.EVT_BUTTON, self._on_clear)
-        toolbar_sizer.Add(clear_button, 0, wx.ALL, 5)
-        
-        # Add the save button
-        save_button = wx.Button(panel, label=_("Save"))
-        save_button.Bind(wx.EVT_BUTTON, self._on_save)
-        toolbar_sizer.Add(save_button, 0, wx.ALL, 5)
-        
-        main_sizer.Add(toolbar_sizer, 0, wx.EXPAND | wx.ALL, 5)
-        
-        # Create the log grid
-        self.grid = wx.grid.Grid(panel)
-        self.grid.CreateGrid(0, 4)
-        
-        # Set up the grid columns
-        self.grid.SetColLabelValue(0, _("Time"))
-        self.grid.SetColLabelValue(1, _("Level"))
-        self.grid.SetColLabelValue(2, _("Source"))
-        self.grid.SetColLabelValue(3, _("Message"))
-        
-        # Set column widths
-        self.grid.SetColSize(0, 150)
-        self.grid.SetColSize(1, 80)
-        self.grid.SetColSize(2, 150)
-        self.grid.SetColSize(3, 400)
-        
-        # Enable auto-sizing
-        self.grid.AutoSizeColumns()
-        
-        # Add the grid to the sizer
-        main_sizer.Add(self.grid, 1, wx.EXPAND | wx.ALL, 5)
-        
-        # Create the details panel
-        details_panel = wx.Panel(panel)
-        details_sizer = wx.BoxSizer(wx.VERTICAL)
-        
-        details_label = wx.StaticText(details_panel, label=_("Details:"))
-        details_sizer.Add(details_label, 0, wx.ALL, 5)
-        
-        self.details_text = wx.TextCtrl(
-            details_panel,
-            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2
-        )
-        details_sizer.Add(self.details_text, 1, wx.EXPAND | wx.ALL, 5)
-        
-        details_panel.SetSizer(details_sizer)
-        
-        # Add the details panel to the sizer
-        main_sizer.Add(details_panel, 1, wx.EXPAND | wx.ALL, 5)
-        
-        # Set up the panel sizer
-        panel.SetSizer(main_sizer)
-        
-        # Bind grid events
-        self.grid.Bind(wx.grid.EVT_GRID_SELECT_CELL, self._on_cell_selected)
-        
-        # Populate the grid
-        self._populate_grid()
+        # Add logs to the text control
+        for record in self.in_memory_handler.records:
+            self.log_text.AppendText(f"{record.timestamp} - {record.level} - {record.name} - {record.message}\n")
     
-    def _populate_grid(self) -> None:
-        """Populate the grid with log records."""
-        # Get the selected level
-        level_idx = self.level_choice.GetSelection()
-        level = None
-        if level_idx > 0:
-            level = self.level_choice.GetString(level_idx)
-        
-        # Get the records
-        records = self.in_memory_handler.get_records(level)
-        
-        # Clear the grid
-        if self.grid.GetNumberRows() > 0:
-            self.grid.DeleteRows(0, self.grid.GetNumberRows())
-        
-        # Add the records to the grid
-        for i, record in enumerate(records):
-            self.grid.AppendRows(1)
-            self.grid.SetCellValue(i, 0, record.timestamp)
-            self.grid.SetCellValue(i, 1, record.level)
-            self.grid.SetCellValue(i, 2, record.name)
-            self.grid.SetCellValue(i, 3, record.message)
-            
-            # Set the cell background color based on the level
-            if record.level == "DEBUG":
-                self.grid.SetCellBackgroundColour(i, 1, wx.Colour(200, 200, 200))
-            elif record.level == "INFO":
-                self.grid.SetCellBackgroundColour(i, 1, wx.Colour(200, 255, 200))
-            elif record.level == "WARNING":
-                self.grid.SetCellBackgroundColour(i, 1, wx.Colour(255, 255, 200))
-            elif record.level == "ERROR":
-                self.grid.SetCellBackgroundColour(i, 1, wx.Colour(255, 200, 200))
-            elif record.level == "CRITICAL":
-                self.grid.SetCellBackgroundColour(i, 1, wx.Colour(255, 150, 150))
-        
-        # Auto-size the grid
-        self.grid.AutoSizeColumns()
-    
-    def _on_cell_selected(self, event: wx.grid.GridEvent) -> None:
-        """Handle cell selection."""
-        row = event.GetRow()
-        
-        # Get the selected level
-        level_idx = self.level_choice.GetSelection()
-        level = None
-        if level_idx > 0:
-            level = self.level_choice.GetString(level_idx)
-        
-        # Get the records
-        records = self.in_memory_handler.get_records(level)
-        
-        # Get the selected record
-        if row < len(records):
-            record = records[row]
-            
-            # Update the details text
-            details = []
-            details.append(f"Time: {record.timestamp}")
-            details.append(f"Level: {record.level}")
-            details.append(f"Source: {record.name}")
-            details.append(f"File: {record.pathname}")
-            details.append(f"Line: {record.lineno}")
-            details.append(f"Message: {record.message}")
-            
-            if record.exc_info:
-                details.append("\nException:")
-                details.append(record.exc_info)
-            
-            self.details_text.SetValue('\n'.join(details))
-        
-        event.Skip()
-    
-    def _on_level_changed(self, event: wx.CommandEvent) -> None:
-        """Handle level change."""
-        self._populate_grid()
-    
-    def _on_refresh(self, event: wx.CommandEvent) -> None:
+    def _on_refresh(self, event):
         """Handle refresh button click."""
-        self._populate_grid()
-    
-    def _on_clear(self, event: wx.CommandEvent) -> None:
-        """Handle clear button click."""
-        # Show a confirmation dialog
-        dlg = wx.MessageDialog(
-            self,
-            _("Are you sure you want to clear the log?"),
-            _("Confirm Clear"),
-            wx.YES_NO | wx.ICON_QUESTION
-        )
-        
-        if dlg.ShowModal() == wx.ID_YES:
-            self.in_memory_handler.clear()
-            self._populate_grid()
-        
-        dlg.Destroy()
-    
-    def _on_save(self, event: wx.CommandEvent) -> None:
-        """Handle save button click."""
-        # Show a file dialog
-        with wx.FileDialog(
-            self,
-            _("Save Log"),
-            wildcard="Log files (*.log)|*.log",
-            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT
-        ) as file_dialog:
-            if file_dialog.ShowModal() == wx.ID_CANCEL:
-                return
-            
-            # Save the log
-            path = file_dialog.GetPath()
-            self._save_log(path)
-    
-    def _save_log(self, path: str) -> None:
-        """Save the log to a file."""
-        # Get the selected level
-        level_idx = self.level_choice.GetSelection()
-        level = None
-        if level_idx > 0:
-            level = self.level_choice.GetString(level_idx)
-        
-        # Get the records
-        records = self.in_memory_handler.get_records(level)
-        
-        # Write the records to the file
-        with open(path, 'w') as f:
-            for record in records:
-                f.write(f"{record.timestamp} - {record.level} - {record.name} - {record.message}\n")
-                if record.exc_info:
-                    f.write(f"{record.exc_info}\n")
-        
-        # Show a success message
-        wx.MessageBox(
-            _("Log saved successfully."),
-            _("Save Log"),
-            wx.OK | wx.ICON_INFORMATION
-        )
-    
-    def _on_close(self, event: wx.CloseEvent) -> None:
-        """Handle frame close."""
-        # Stop the timer
-        self.timer.Stop()
-        
-        # Hide the frame instead of closing it
-        self.Hide()
-    
-    def _on_timer(self, event: wx.TimerEvent) -> None:
-        """Handle timer event."""
-        # Refresh the grid
-        self._populate_grid()
+        self._populate_logs()
 
 class EnhancedLogger:
     """Enhanced logger for InVesalius."""
@@ -508,11 +293,18 @@ class EnhancedLogger:
     
     def show_log_viewer(self, parent: Optional[wx.Window] = None) -> None:
         """Show the log viewer."""
-        if self._log_viewer_frame is None:
-            self._log_viewer_frame = LogViewerFrame(parent, self._in_memory_handler)
-        
-        self._log_viewer_frame.Show()
-        self._log_viewer_frame.Raise()
+        print("show_log_viewer called")  # Debug output
+        try:
+            if self._log_viewer_frame is None:
+                self._log_viewer_frame = LogViewerFrame(parent, self._in_memory_handler)
+            
+            self._log_viewer_frame.Show()
+            self._log_viewer_frame.Raise()
+            print("Log viewer should be visible now")
+        except Exception as e:
+            print(f"Error showing log viewer: {e}")
+            import traceback
+            traceback.print_exc()
     
     def set_level(self, level: Union[str, int]) -> None:
         """Set the logging level."""
@@ -609,7 +401,14 @@ def get_logger(name: Optional[str] = None) -> logging.Logger:
 # Function to show the log viewer
 def show_log_viewer(parent: Optional[wx.Window] = None) -> None:
     """Show the log viewer."""
-    enhanced_logger.show_log_viewer(parent)
+    print("show_log_viewer called")  # Debug output
+    try:
+        enhanced_logger.show_log_viewer(parent)
+        print("Log viewer should be visible now")
+    except Exception as e:
+        print(f"Error showing log viewer: {e}")
+        import traceback
+        traceback.print_exc()
 
 # Function to set the logging level
 def set_level(level: Union[str, int]) -> None:

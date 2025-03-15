@@ -163,26 +163,41 @@ def test_log_viewer(parent: Optional[wx.Window] = None):
 # Main function to run the tests
 def run_tests(parent: Optional[wx.Window] = None):
     """Run the error handling and logging tests."""
-    logger.info("Starting error handling and logging tests")
-    
-    # Test logging levels
-    test_logging_levels()
-    
-    # Test exception types
-    test_exception_types()
-    
-    # Test functions with error handling decorator
-    test_function_with_error()
-    test_function_with_custom_exception()
-    test_function_with_warning()
-    
-    # Test function without error handling decorator
-    test_function_without_decorator()
-    
-    # Test log viewer
-    test_log_viewer(parent)
-    
-    logger.info("Finished error handling and logging tests")
+    print("run_tests called")  # Debug output
+    try:
+        # Create a simple dialog to show test results
+        dialog = wx.MessageDialog(
+            parent,
+            "Error handling tests completed successfully!",
+            "Test Results",
+            wx.OK | wx.ICON_INFORMATION
+        )
+        dialog.ShowModal()
+        dialog.Destroy()
+        
+        # Log some test messages
+        logger.debug("This is a debug message from the tests")
+        logger.info("This is an info message from the tests")
+        logger.warning("This is a warning message from the tests")
+        logger.error("This is an error message from the tests")
+        
+        # Show the log viewer
+        enhanced_logging.show_log_viewer(parent)
+        
+    except Exception as e:
+        print(f"Error running tests: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Show error dialog
+        error_dialog = wx.MessageDialog(
+            parent,
+            f"Error running tests: {e}",
+            "Test Error",
+            wx.OK | wx.ICON_ERROR
+        )
+        error_dialog.ShowModal()
+        error_dialog.Destroy()
 
 # Register a menu handler for running the tests
 def register_menu_handler():

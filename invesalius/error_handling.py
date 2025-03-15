@@ -32,6 +32,7 @@ including:
 
 import functools
 import inspect
+import logging
 import os
 import platform
 import sys
@@ -40,6 +41,7 @@ from datetime import datetime
 from enum import Enum, auto
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 
+import psutil
 import wx
 
 import invesalius.constants as const
@@ -642,21 +644,20 @@ class ErrorDialog(wx.Dialog):
         )
 
 # Global error handler for unhandled exceptions
-def global_exception_handler(exctype, value, traceback):
+def global_exception_handler(exctype, value, tb):
     """
     Global exception handler for unhandled exceptions.
     
-    Parameters:
-        exctype: The exception type.
-        value: The exception value.
-        traceback: The exception traceback.
-    """
-    # Import the logger here to avoid circular imports
-    from invesalius.gui import log
-    logger = log.invLogger.getLogger()
+    This function is set as the sys.excepthook to catch unhandled exceptions.
+    It logs the exception, creates a crash report, and shows an error dialog.
     
+    Args:
+        exctype: The exception type
+        value: The exception value
+        tb: The traceback
+    """
     # Log the exception
-    logger.critical("Unhandled exception", exc_info=(exctype, value, traceback))
+    logging.critical("Unhandled exception", exc_info=(exctype, value, tb))
     
     # Create an InVesalius exception
     exception = InVesaliusException(
@@ -664,7 +665,7 @@ def global_exception_handler(exctype, value, traceback):
         category=ErrorCategory.GENERAL,
         severity=ErrorSeverity.CRITICAL,
         details={
-            'traceback': ''.join(traceback.format_exception(exctype, value, traceback))
+            'traceback': ''.join(traceback.format_exception(exctype, value, tb))
         },
         original_exception=value
     )
@@ -685,3 +686,60 @@ def global_exception_handler(exctype, value, traceback):
 
 # Set the global exception handler
 sys.excepthook = global_exception_handler 
+
+def show_message(title, message, style=wx.OK | wx.ICON_INFORMATION, log_level=logging.INFO):
+    """
+    Show a message to the user and log it.
+    
+    Parameters:
+    -----------
+    title : str
+        The title of the message box.
+    message : str
+        The message to display and log.
+    style : int
+        The style of the message box (wx.OK, wx.ICON_INFORMATION, wx.ICON_WARNING, etc.).
+    log_level : int
+        The logging level to use (logging.INFO, logging.WARNING, logging.ERROR, etc.).
+    
+    Returns:
+    --------
+    int
+        The result of the message box.
+    """
+    # Determine the logger based on the calling module
+    frame = inspect.currentframe().f_back
+    module_name = frame.f_globals['__name__']
+    logger = logging.getLogger(module_name)
+    
+    # Log the message with the appropriate level
+    if log_level == logging.DEBUG:
+        logger.debug(f"{title}: {message}")
+    elif log_level == logging.INFO:
+        logger.info(f"{title}: {message}")
+    elif log_level == logging.WARNING:
+        logger.warning(f"{title}: {message}")
+    elif log_level == logging.ERROR:
+        logger.error(f"{title}: {message}")
+    elif log_level == logging.CRITICAL:
+        logger.critical(f"{title}: {message}")
+    
+    # Show the message box
+    return wx.MessageBox(message, title, style)
+
+# Convenience functions for common message types
+def show_info(title, message):
+    """Show an information message and log it at INFO level."""
+    return show_message(title, message, wx.OK | wx.ICON_INFORMATION, logging.INFO)
+
+def show_warning(title, message):
+    """Show a warning message and log it at WARNING level."""
+    return show_message(title, message, wx.OK | wx.ICON_WARNING, logging.WARNING)
+
+def show_error(title, message):
+    """Show an error message and log it at ERROR level."""
+    return show_message(title, message, wx.OK | wx.ICON_ERROR, logging.ERROR)
+
+def show_question(title, message):
+    """Show a question message and log it at INFO level."""
+    return show_message(title, message, wx.YES_NO | wx.ICON_QUESTION, logging.INFO) 

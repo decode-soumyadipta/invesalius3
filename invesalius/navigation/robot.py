@@ -28,7 +28,17 @@ import invesalius.session as ses
 from invesalius.i18n import tr as _
 from invesalius.pubsub import pub as Publisher
 from invesalius.utils import Singleton
+from invesalius.navigation.diagnostics import (
+    ConnectionEvent,
+    ConnectionStatus,
+    DeviceType,
+    DiagnosticsManager,
+    run_diagnostic_tests,
+)
+from invesalius.enhanced_logging import EnhancedLogger
 
+# Get logger
+logger = EnhancedLogger.get_logger("invesalius.navigation.robot")
 
 class RobotObjective(Enum):
     NONE = 0
@@ -55,6 +65,11 @@ class Robot(metaclass=Singleton):
 
         self.objective = RobotObjective.NONE
         self.target = None
+        
+        # Initialize diagnostics
+        self.diagnostics_manager = DiagnosticsManager()
+        self._last_status = ConnectionStatus.DISCONNECTED
+        self._record_status(ConnectionStatus.DISCONNECTED, "Robot initialized in disconnected state")
 
         # If tracker already has fiducials set, send them to the robot; this can happen, e.g.,
         # when a pre-existing state is loaded at start-up.
@@ -67,6 +82,19 @@ class Robot(metaclass=Singleton):
             self.InitializeRobot()
 
         self.__bind_events()
+
+    def _record_status(self, status, message=""):
+        """Record a connection status event"""
+        if status != self._last_status:
+            event = ConnectionEvent(
+                device_type=DeviceType.ROBOT,
+                status=status,
+                message=message,
+                device_info={"ip": self.robot_ip} if self.robot_ip else {}
+            )
+            self.diagnostics_manager.record_event(event)
+            self._last_status = status
+            logger.info(f"Robot status changed: {status.name} - {message}")
 
     def __bind_events(self):
         Publisher.subscribe(
@@ -120,8 +148,11 @@ class Robot(metaclass=Singleton):
 
         self.is_robot_connected = data
         if self.is_robot_connected:
+            self._record_status(ConnectionStatus.CONNECTED, f"Robot connected to {self.robot_ip}")
             Publisher.sendMessage("Enable move away button", enabled=True)
             Publisher.sendMessage("Enable free drive button", enabled=True)
+        else:
+            self._record_status(ConnectionStatus.DISCONNECTED, "Robot disconnected")
 
     def RegisterRobot(self):
         Publisher.sendMessage("End busy cursor")
@@ -155,23 +186,38 @@ class Robot(metaclass=Singleton):
     def IsConnected(self):
         return self.is_robot_connected
 
-    def IsReady(self):  # LUKATODO: use this check before enabling robot for navigation...
-        return self.IsConnected() and (self.coil_name in self.navigation.coil_registrations)
+    def IsReady(self):
+        ready = self.IsConnected() and (self.coil_name in self.navigation.coil_registrations)
+        if ready and self._last_status != ConnectionStatus.READY:
+            self._record_status(ConnectionStatus.READY, "Robot is ready for navigation")
+        return ready
 
     def SetRobotIP(self, data):
         if data is not None:
             self.robot_ip = data
+            logger.info(f"Robot IP set to {self.robot_ip}")
 
     def ConnectToRobot(self):
+        self._record_status(ConnectionStatus.CONNECTING, f"Attempting to connect to robot at {self.robot_ip}")
         Publisher.sendMessage("Neuronavigation to Robot: Connect to robot", robot_IP=self.robot_ip)
-        print("Connected to robot")
+        logger.info(f"Connection request sent to robot at {self.robot_ip}")
 
     def InitializeRobot(self):
+        if self.is_robot_connected:
+            logger.info("Initializing robot with transformation matrix")
         Publisher.sendMessage(
             "Neuronavigation to Robot: Set robot transformation matrix",
             data=self.matrix_tracker_to_robot.tolist(),
         )
-        print("Robot initialized")
+
+    def run_diagnostics(self):
+        """Run diagnostic tests for the robot and return results"""
+        logger.info("Running robot diagnostic tests")
+        return run_diagnostic_tests(DeviceType.ROBOT, {"robot": self})
+
+    def get_connection_history(self):
+        """Get the connection history for this device"""
+        return self.diagnostics_manager.get_connection_history(DeviceType.ROBOT)
 
     def GetCoilName(self):
         return self.coil_name

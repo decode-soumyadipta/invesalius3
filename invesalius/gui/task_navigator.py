@@ -50,9 +50,6 @@ except ImportError:
 import invesalius.constants as const
 import invesalius.data.coordinates as dco
 import invesalius.data.slice_ as slice_
-
-# Make sure to import our new modules
-import invesalius.gui.connection_dashboard as connection_dashboard
 import invesalius.gui.dialogs as dlg
 import invesalius.gui.widgets.gradient as grad
 import invesalius.project as prj
@@ -65,6 +62,17 @@ from invesalius.i18n import tr as _
 from invesalius.navigation.navigation import NavigationHub
 from invesalius.navigation.robot import RobotObjective
 from invesalius.pubsub import pub as Publisher
+from invesalius.navigation.diagnostics import (
+    ConnectionStatus,
+    DeviceType,
+    DiagnosticStatus,
+    run_diagnostic_tests,
+)
+from invesalius.enhanced_logging import EnhancedLogger
+from invesalius.gui.connection_logs_dialog import ConnectionLogsDialog
+
+# Get logger
+logger = EnhancedLogger.get_logger("invesalius.gui.task_navigator")
 
 BTN_NEW = wx.NewIdRef()
 BTN_IMPORT_LOCAL = wx.NewIdRef()
@@ -1793,16 +1801,24 @@ class NavigationPanel(wx.Panel):
 
         self.control_panel = ControlPanel(self, nav_hub)
         self.marker_panel = MarkersPanel(self, nav_hub)
+        self.connection_status_panel = ConnectionStatusPanel(self, nav_hub)
 
         top_sizer = wx.BoxSizer(wx.HORIZONTAL)
         top_sizer.Add(self.marker_panel, 1, wx.GROW | wx.EXPAND)
+
+        connection_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        connection_sizer.Add(self.connection_status_panel, 1, wx.EXPAND | wx.TOP, 5)
 
         bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
         bottom_sizer.Add(self.control_panel, 0, wx.EXPAND | wx.TOP, 5)
 
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         main_sizer.AddMany(
-            [(top_sizer, 1, wx.EXPAND | wx.GROW), (bottom_sizer, 0, wx.ALIGN_CENTER_HORIZONTAL)]
+            [
+                (top_sizer, 1, wx.EXPAND | wx.GROW),
+                (connection_sizer, 0, wx.EXPAND | wx.GROW),
+                (bottom_sizer, 0, wx.ALIGN_CENTER_HORIZONTAL),
+            ]
         )
         self.sizer = main_sizer
         self.SetSizerAndFit(main_sizer)
@@ -4322,22 +4338,252 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
         if focus:
             self.FocusOnMarker(num_items)
 
-    def OnConnectionDashboard(self, event):
-        """Show the connection status dashboard."""
-        try:
-            # Try to import diagnostics module to initialize it
-            from invesalius.navigation.diagnostics import get_diagnostics_system
 
-            # Initialize diagnostics if needed
-            get_diagnostics_system()
-            # Show the dashboard
-            connection_dashboard.show_connection_dashboard(self)
-        except Exception as e:
-            print(f"Error showing connection dashboard: {e}")
-            wx.MessageBox(
-                _(
-                    "Error showing connection dashboard. Please make sure all required dependencies are installed."
-                ),
-                "Error",
-                wx.OK | wx.ICON_ERROR,
-            )
+class ConnectionStatusPanel(wx.Panel):
+    """Panel for displaying connection status and diagnostics for navigation devices"""
+    def __init__(self, parent, nav_hub):
+        wx.Panel.__init__(self, parent, style=wx.BORDER_THEME)
+        
+        self.nav_hub = nav_hub
+        self.tracker = nav_hub.tracker
+        self.robot = nav_hub.robot
+        
+        # Timer for auto-refresh
+        self.refresh_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.UpdateStatus, self.refresh_timer)
+        
+        # Main panel title
+        title = wx.StaticText(self, -1, _("Connection Status Dashboard"))
+        title.SetFont(wx.Font(10, wx.DEFAULT, wx.NORMAL, wx.BOLD))
+        
+        # Create device status panels
+        self.tracker_panel = self._create_device_panel(DeviceType.TRACKER, _("Tracker"))
+        self.robot_panel = self._create_device_panel(DeviceType.ROBOT, _("Robot"))
+        
+        # Run diagnostics button
+        btn_run_diagnostics = wx.Button(self, -1, _("Run Diagnostics"))
+        btn_run_diagnostics.Bind(wx.EVT_BUTTON, self.OnRunDiagnostics)
+        
+        # Toggle auto-refresh
+        self.auto_refresh_check = wx.CheckBox(self, -1, _("Auto-refresh (2s)"))
+        self.auto_refresh_check.SetValue(True)
+        self.auto_refresh_check.Bind(wx.EVT_CHECKBOX, self.OnToggleAutoRefresh)
+        
+        # Create refresh button
+        btn_refresh = wx.Button(self, -1, _("Refresh"))
+        btn_refresh.Bind(wx.EVT_BUTTON, self.OnRefresh)
+        
+        # Create bottom button sizer
+        bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        bottom_sizer.Add(btn_run_diagnostics, 0, wx.RIGHT, 5)
+        bottom_sizer.Add(self.auto_refresh_check, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        bottom_sizer.Add(btn_refresh, 0)
+        
+        # Create main sizer and add components
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+        main_sizer.Add(title, 0, wx.ALL, 5)
+        main_sizer.Add(wx.StaticLine(self, -1), 0, wx.EXPAND | wx.ALL, 2)
+        main_sizer.Add(self.tracker_panel, 0, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(self.robot_panel, 0, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(wx.StaticLine(self, -1), 0, wx.EXPAND | wx.ALL, 2)
+        main_sizer.Add(bottom_sizer, 0, wx.ALL, 5)
+        
+        self.SetSizer(main_sizer)
+        self.Layout()
+        
+        # Set up event bindings
+        self.__bind_events()
+        
+        # Start the refresh timer
+        self.refresh_timer.Start(2000)  # Refresh every 2 seconds
+        
+        # Initial status update
+        self.UpdateStatus()
+    
+    def __bind_events(self):
+        Publisher.subscribe(self.OnTrackerConnected, "Tracker connected")
+        Publisher.subscribe(self.OnTrackerDisconnected, "Tracker disconnected")
+        Publisher.subscribe(self.OnRobotConnectionStatus, "Robot to Neuronavigation: Robot connection status")
+    
+    def _create_device_panel(self, device_type, label):
+        """Create a panel for a specific device type"""
+        panel = wx.Panel(self, style=wx.BORDER_SIMPLE)
+        
+        # Device name
+        device_name = wx.StaticText(panel, -1, label)
+        device_name.SetFont(wx.Font(9, wx.DEFAULT, wx.NORMAL, wx.BOLD))
+        
+        # Status indicator
+        status_label = wx.StaticText(panel, -1, _("Status:"))
+        self.status_indicators = getattr(self, "status_indicators", {})
+        self.status_indicators[device_type] = wx.StaticText(panel, -1, _("Unknown"))
+        
+        # Details
+        details_label = wx.StaticText(panel, -1, _("Details:"))
+        self.details_text = getattr(self, "details_text", {})
+        self.details_text[device_type] = wx.StaticText(panel, -1, "")
+        
+        # Last update
+        last_update_label = wx.StaticText(panel, -1, _("Last updated:"))
+        self.last_update_text = getattr(self, "last_update_text", {})
+        self.last_update_text[device_type] = wx.StaticText(panel, -1, "")
+        
+        # Diagnostics results
+        diagnostics_label = wx.StaticText(panel, -1, _("Diagnostics:"))
+        self.diagnostics_text = getattr(self, "diagnostics_text", {})
+        self.diagnostics_text[device_type] = wx.StaticText(panel, -1, _("No diagnostics run"))
+        
+        # View logs button
+        btn_view_logs = wx.Button(panel, -1, _("View Logs"), style=wx.BU_EXACTFIT)
+        device_id = device_type.value
+        btn_view_logs.Bind(wx.EVT_BUTTON, lambda evt, dt=device_type: self.OnViewLogs(evt, dt))
+        
+        # Create grid sizer for labels and values
+        grid = wx.FlexGridSizer(rows=4, cols=2, vgap=5, hgap=10)
+        grid.AddGrowableCol(1)
+        
+        grid.Add(status_label, 0, wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL)
+        grid.Add(self.status_indicators[device_type], 0, wx.EXPAND)
+        
+        grid.Add(details_label, 0, wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL)
+        grid.Add(self.details_text[device_type], 0, wx.EXPAND)
+        
+        grid.Add(last_update_label, 0, wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL)
+        grid.Add(self.last_update_text[device_type], 0, wx.EXPAND)
+        
+        grid.Add(diagnostics_label, 0, wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL)
+        grid.Add(self.diagnostics_text[device_type], 0, wx.EXPAND)
+        
+        # Create main sizer and add components
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(device_name, 0, wx.ALL, 5)
+        sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(btn_view_logs, 0, wx.ALL | wx.ALIGN_RIGHT, 5)
+        
+        panel.SetSizer(sizer)
+        return panel
+    
+    def UpdateStatus(self, evt=None):
+        """Update the status display for all devices"""
+        self._update_device_status(DeviceType.TRACKER, self.tracker)
+        self._update_device_status(DeviceType.ROBOT, self.robot)
+    
+    def _update_device_status(self, device_type, device):
+        """Update status display for a specific device"""
+        if device_type == DeviceType.TRACKER:
+            is_connected = device.IsConnected()
+            device_info = f"Device: {device.tracker_id}" if device.tracker_id else ""
+        elif device_type == DeviceType.ROBOT:
+            is_connected = device.IsConnected()
+            device_info = f"IP: {device.robot_ip}" if device.robot_ip else ""
+        else:
+            return
+        
+        # Update status
+        status = ConnectionStatus.CONNECTED if is_connected else ConnectionStatus.DISCONNECTED
+        status_text = status.name
+        status_indicator = self.status_indicators[device_type]
+        
+        # Set color based on status
+        if status == ConnectionStatus.CONNECTED:
+            status_indicator.SetForegroundColour(wx.Colour(0, 128, 0))  # Green
+            status_text = _("CONNECTED")
+        elif status == ConnectionStatus.READY:
+            status_indicator.SetForegroundColour(wx.Colour(0, 128, 0))  # Green
+            status_text = _("READY")
+        elif status == ConnectionStatus.CONNECTING:
+            status_indicator.SetForegroundColour(wx.Colour(255, 128, 0))  # Orange
+            status_text = _("CONNECTING")
+        else:
+            status_indicator.SetForegroundColour(wx.Colour(255, 0, 0))  # Red
+            status_text = _("DISCONNECTED")
+        
+        status_indicator.SetLabel(status_text)
+        
+        # Update details
+        self.details_text[device_type].SetLabel(device_info)
+        
+        # Update last updated
+        now = time.strftime("%H:%M:%S")
+        self.last_update_text[device_type].SetLabel(now)
+    
+    def OnRunDiagnostics(self, evt):
+        """Run diagnostics for all devices"""
+        # Tracker diagnostics
+        tracker_results = self.tracker.run_diagnostics()
+        self._update_diagnostics_text(DeviceType.TRACKER, tracker_results)
+        
+        # Robot diagnostics
+        robot_results = self.robot.run_diagnostics()
+        self._update_diagnostics_text(DeviceType.ROBOT, robot_results)
+        
+        # Refresh the UI
+        self.Layout()
+    
+    def _update_diagnostics_text(self, device_type, results):
+        """Update the diagnostics text based on results"""
+        if not results:
+            self.diagnostics_text[device_type].SetLabel(_("No results"))
+            return
+        
+        # Count results by status
+        status_count = {DiagnosticStatus.PASSED: 0, DiagnosticStatus.WARNING: 0, DiagnosticStatus.FAILED: 0}
+        for result in results:
+            status_count[result.status] = status_count.get(result.status, 0) + 1
+        
+        # Create the status text
+        text = f"{status_count[DiagnosticStatus.PASSED]} {_('passed')}, "
+        text += f"{status_count[DiagnosticStatus.WARNING]} {_('warnings')}, "
+        text += f"{status_count[DiagnosticStatus.FAILED]} {_('failed')}"
+        
+        self.diagnostics_text[device_type].SetLabel(text)
+        
+        # Set color based on results
+        if status_count[DiagnosticStatus.FAILED] > 0:
+            self.diagnostics_text[device_type].SetForegroundColour(wx.Colour(255, 0, 0))  # Red
+        elif status_count[DiagnosticStatus.WARNING] > 0:
+            self.diagnostics_text[device_type].SetForegroundColour(wx.Colour(255, 128, 0))  # Orange
+        else:
+            self.diagnostics_text[device_type].SetForegroundColour(wx.Colour(0, 128, 0))  # Green
+    
+    def OnViewLogs(self, evt, device_type):
+        """Show the connection logs for the specified device"""
+        if device_type == DeviceType.TRACKER:
+            device = self.tracker
+        elif device_type == DeviceType.ROBOT:
+            device = self.robot
+        else:
+            return
+        
+        # Get connection history
+        history = device.get_connection_history()
+        if not history:
+            wx.MessageBox(_("No connection logs available for this device."), _("Connection Logs"))
+            return
+        
+        # Create a dialog to display logs
+        with ConnectionLogsDialog(self, device_type.name, history) as dialog:
+            dialog.ShowModal()
+    
+    def OnRefresh(self, evt):
+        """Manual refresh of the status display"""
+        self.UpdateStatus()
+    
+    def OnToggleAutoRefresh(self, evt):
+        """Toggle automatic refresh"""
+        if self.auto_refresh_check.GetValue():
+            self.refresh_timer.Start(2000)
+        else:
+            self.refresh_timer.Stop()
+    
+    def OnTrackerConnected(self):
+        """Handle tracker connected event"""
+        self.UpdateStatus()
+    
+    def OnTrackerDisconnected(self):
+        """Handle tracker disconnected event"""
+        self.UpdateStatus()
+    
+    def OnRobotConnectionStatus(self, data):
+        """Handle robot connection status event"""
+        self.UpdateStatus()

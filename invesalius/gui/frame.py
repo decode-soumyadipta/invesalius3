@@ -52,6 +52,18 @@ try:
 except ImportError:
     from wx import TaskBarIcon as wx_TaskBarIcon
 
+# Within this file, we need to:
+# 1. Import our new module
+# 2. Add an ID constant for the menu item
+# 3. Add the menu item to the tools menu
+# 4. Add a handler for the menu item
+
+# First, let's add the import near other imports:
+import invesalius.gui.connection_dashboard as connection_dashboard
+
+# Add an ID for the menu item
+# Find where other ID constants are defined (usually near the top of the file with other constants)
+ID_SHOW_CONNECTION_DASHBOARD = wx.NewId()
 
 # Layout tools' IDs - this is used only locally, therefore doesn't
 # need to be defined in constants.py
@@ -729,6 +741,9 @@ class Frame(wx.Frame):
         elif id == ID_RUN_ERROR_HANDLING_TESTS:
             self.OnRunErrorHandlingTests(None)
 
+        elif id == ID_SHOW_CONNECTION_DASHBOARD:
+            self.OnShowConnectionDashboard(None)
+
     def OnDbsMode(self):
         st = self.actived_dbs_mode.IsChecked()
         Publisher.sendMessage("Hide target button")
@@ -1086,26 +1101,15 @@ class Frame(wx.Frame):
             subprocess.Popen(["xdg-open", path])
 
     def OnShowLogViewer(self, evt):
-        """Show the log viewer."""
-        print("OnShowLogViewer called")  # Debug output
+        from invesalius.gui.log_viewer import LogViewerDialog
 
-        try:
-            # Use the enhanced log viewer from enhanced_logging.py
-            from invesalius import enhanced_logging
-
-            enhanced_logging.show_log_viewer(self)
-
-        except Exception as e:
-            print(f"Error showing log viewer: {e}")
-            import traceback
-
-            traceback.print_exc()
-
-            # Show error message
-            wx.MessageBox(f"Error showing log viewer: {e}", "Error", wx.OK | wx.ICON_ERROR)
+        dialog = LogViewerDialog(self)
+        dialog.Show()
 
     def OnRunErrorHandlingTests(self, evt):
-        """Run the error handling tests."""
+        """
+        Run a series of tests to demonstrate error handling functionality.
+        """
         print("OnRunErrorHandlingTests called")  # Debug output
 
         try:
@@ -1250,6 +1254,24 @@ class Frame(wx.Frame):
             # Show error message
             wx.MessageBox(
                 f"Error running error handling tests: {e}", "Error", wx.OK | wx.ICON_ERROR
+            )
+
+    def OnShowConnectionDashboard(self, evt):
+        """Show the Connection Status Dashboard."""
+        try:
+            from invesalius.navigation.connection_dashboard import show_connection_dashboard
+
+            show_connection_dashboard(self)
+        except Exception as e:
+            import traceback
+
+            from invesalius.gui.dialogs import ShowExceptionMessage
+
+            tb = traceback.format_exc()
+            ShowExceptionMessage(
+                title="Error",
+                message=f"Could not open Connection Dashboard: {str(e)}",
+                exception=tb,
             )
 
 
@@ -1527,6 +1549,10 @@ class MenuBar(wx.MenuBar):
         # Add log viewer and error handling test menu items
         tools_menu.Append(ID_SHOW_LOG_VIEWER, _("Show Log Viewer"))
         tools_menu.Append(ID_RUN_ERROR_HANDLING_TESTS, _("Run Error Handling Tests"))
+
+        # Add connection dashboard menu item
+        tools_menu.AppendSeparator()
+        tools_menu.Append(ID_SHOW_CONNECTION_DASHBOARD, _("Connection Status Dashboard"))
 
         self.tools_menu = tools_menu
 
@@ -2734,3 +2760,26 @@ class HistoryToolBar(AuiToolBar):
         else:
             self.EnableTool(wx.ID_REDO, False)
         self.Refresh()
+
+    def OnShowConnectionDashboard(self, evt):
+        """Show the connection status dashboard."""
+        try:
+            # Try to import diagnostics module to initialize it
+            from invesalius.navigation.diagnostics import get_diagnostics_system
+
+            # Initialize diagnostics if needed
+            get_diagnostics_system()
+            # Show the dashboard
+            connection_dashboard.show_connection_dashboard(self)
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            print(f"Error showing connection dashboard: {e}")
+            wx.MessageBox(
+                _(
+                    "Error showing connection dashboard. Please make sure all required dependencies are installed."
+                ),
+                "Error",
+                wx.OK | wx.ICON_ERROR,
+            )

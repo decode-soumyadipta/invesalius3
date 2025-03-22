@@ -50,6 +50,9 @@ except ImportError:
 import invesalius.constants as const
 import invesalius.data.coordinates as dco
 import invesalius.data.slice_ as slice_
+
+# Make sure to import our new modules
+import invesalius.gui.connection_dashboard as connection_dashboard
 import invesalius.gui.dialogs as dlg
 import invesalius.gui.widgets.gradient as grad
 import invesalius.project as prj
@@ -4318,3 +4321,23 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
         # Focus on the added marker.
         if focus:
             self.FocusOnMarker(num_items)
+
+    def OnConnectionDashboard(self, event):
+        """Show the connection status dashboard."""
+        try:
+            # Try to import diagnostics module to initialize it
+            from invesalius.navigation.diagnostics import get_diagnostics_system
+
+            # Initialize diagnostics if needed
+            get_diagnostics_system()
+            # Show the dashboard
+            connection_dashboard.show_connection_dashboard(self)
+        except Exception as e:
+            print(f"Error showing connection dashboard: {e}")
+            wx.MessageBox(
+                _(
+                    "Error showing connection dashboard. Please make sure all required dependencies are installed."
+                ),
+                "Error",
+                wx.OK | wx.ICON_ERROR,
+            )

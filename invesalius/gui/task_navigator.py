@@ -284,7 +284,7 @@ class InnerFoldPanel(wx.Panel):
             self.fold_panel.Collapse(self.nav_panel)
 
     def OnFoldPressCaption(self, evt):
-        id = evt.GetTag().GetId()
+        # id = evt.GetTag().GetId()  # Unused variable
         expanded = evt.GetFoldStatus()
 
         if not expanded:
@@ -380,7 +380,9 @@ class CoregistrationPanel(wx.Panel):
         ):
             # Do not allow user to move to other (forward) tabs.
             self.book.SetSelection(const.IMPORTS_PAGE)
-            wx.MessageBox(_("Please import image first."), _("InVesalius 3"))
+            from invesalius.error_handling import show_warning
+
+            show_warning(_("InVesalius 3"), _("Please import image first."))
             return
 
         # old page validations
@@ -388,7 +390,9 @@ class CoregistrationPanel(wx.Panel):
             # Do not allow user to move to other (forward) tabs if image fiducials not done.
             if not self.image.AreImageFiducialsSet():
                 self.book.SetSelection(const.IMAGE_PAGE)
-                wx.MessageBox(_("Please do the image registration first."), _("InVesalius 3"))
+                from invesalius.error_handling import show_warning
+
+                show_warning(_("InVesalius 3"), _("Please do the image registration first."))
         if old_page != const.REFINE_PAGE:
             # Load data into refine tab
             Publisher.sendMessage("Update UI for refine tab")
@@ -398,7 +402,9 @@ class CoregistrationPanel(wx.Panel):
             # Do not allow user to move to other (forward) tabs if tracker fiducials not done.
             if self.image.AreImageFiducialsSet() and not self.tracker.AreTrackerFiducialsSet():
                 self.book.SetSelection(const.TRACKER_PAGE)
-                wx.MessageBox(_("Please do the tracker registration first."), _("InVesalius 3"))
+                from invesalius.error_handling import show_warning
+
+                show_warning(_("InVesalius 3"), _("Please do the tracker registration first."))
 
     # Unfold specific notebook pages
     def _FoldImports(self):
@@ -1782,28 +1788,40 @@ class NavigationPanel(wx.Panel):
 
         self.__bind_events()
 
+        # Create panels directly on this panel
         self.control_panel = ControlPanel(self, nav_hub)
         self.marker_panel = MarkersPanel(self, nav_hub)
+        self.param_display_panel = NavigationParamDisplayPanel(self, nav_hub.navigation)
 
+        # Set up layout
         top_sizer = wx.BoxSizer(wx.HORIZONTAL)
         top_sizer.Add(self.marker_panel, 1, wx.GROW | wx.EXPAND)
 
+        # Create bottom sizer with more space for controls
         bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        bottom_sizer.Add(self.control_panel, 0, wx.EXPAND | wx.TOP, 5)
+        # Give the control panel more space horizontally
+        bottom_sizer.Add(self.control_panel, 1, wx.EXPAND)
+        # Add parameter panel with appropriate position
+        bottom_sizer.Add(self.param_display_panel, 0, wx.EXPAND | wx.LEFT, 5)
 
         main_sizer = wx.BoxSizer(wx.VERTICAL)
-        main_sizer.AddMany(
-            [(top_sizer, 1, wx.EXPAND | wx.GROW), (bottom_sizer, 0, wx.ALIGN_CENTER_HORIZONTAL)]
-        )
+        main_sizer.Add(top_sizer, 1, wx.EXPAND | wx.GROW)
+        # Ensure the bottom section has enough vertical space
+        main_sizer.Add(bottom_sizer, 0, wx.EXPAND | wx.TOP, 5)
+
         self.sizer = main_sizer
-        self.SetSizerAndFit(main_sizer)
-        self.Update()
+        self.SetSizer(main_sizer)
+
+        # Force update of layout
+        self.Layout()
+        main_sizer.SetSizeHints(self)
 
     def __bind_events(self):
         Publisher.subscribe(self.OnCloseProject, "Close project data")
         Publisher.subscribe(self.OnUpdateNavigationPanel, "Update navigation panel")
 
     def OnUpdateNavigationPanel(self):
+        self.Layout()
         self.sizer.Fit(self)
         if self.GetParent().IsExpanded():
             self.GetParent().Fit()
@@ -1817,7 +1835,7 @@ class NavigationPanel(wx.Panel):
         Publisher.sendMessage("Update marker offset state", create=False)
         Publisher.sendMessage("Remove tracts")
         Publisher.sendMessage("Disable style", style=const.SLICE_STATE_CROSS)
-        # TODO: Reset camera initial focus
+        # Reset camera initial focus
         Publisher.sendMessage("Reset cam clipping range")
         self.navigation.StopNavigation()
         self.navigation.__init__(
@@ -2073,24 +2091,19 @@ class ControlPanel(wx.Panel):
             ]
         )
 
-        navigation_buttons_sizer = wx.FlexGridSizer(4, 5, 5)
+        # Using a 3x4 grid for better button arrangement (3 rows, 4 columns maximum)
+        navigation_buttons_sizer = wx.GridSizer(rows=3, cols=4, hgap=5, vgap=5)
         navigation_buttons_sizer.AddMany(
             [
-                (tractography_checkbox),
-                (target_mode_button),
                 (track_object_button),
-                (checkbox_serial_port),
-                (efield_checkbox),
-                (lock_to_target_button),
                 (show_coil_button),
                 (show_probe_button),
+                (checkbox_serial_port),
+                (tractography_checkbox),
+                (efield_checkbox),
+                (target_mode_button),
+                (lock_to_target_button),
                 (show_motor_map_button),
-            ]
-        )
-
-        robot_buttons_sizer = wx.FlexGridSizer(4, 5, 5)
-        robot_buttons_sizer.AddMany(
-            [
                 (robot_track_target_button),
                 (robot_move_away_button),
                 (robot_free_drive_button),
@@ -2100,9 +2113,8 @@ class ControlPanel(wx.Panel):
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         main_sizer.AddMany(
             [
-                (start_navigation_button_sizer, 0, wx.EXPAND | wx.ALL, 10),
-                (navigation_buttons_sizer, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.TOP | wx.BOTTOM, 10),
-                (robot_buttons_sizer, 0, wx.ALIGN_LEFT | wx.TOP | wx.BOTTOM, 5),
+                (start_navigation_button_sizer, 0, wx.EXPAND | wx.ALL, 5),
+                (navigation_buttons_sizer, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.ALL, 5),
             ]
         )
 
@@ -2458,7 +2470,14 @@ class ControlPanel(wx.Panel):
         self.UpdateToggleButton(ctrl)
 
     # 'Target mode' button
-    def TrackObject(self, enabled):
+    def TrackObject(self, enabled=None):
+        if enabled is None:
+            # If no parameter is provided, don't change the state
+            return
+
+        # Original implementation continues here
+        Publisher.sendMessage("Track object state", track_object=enabled)
+
         self.UpdateTargetButton()
 
     def ShowTargetButton(self):
@@ -2789,7 +2808,7 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
         # In the future, it would be better if the panel could initialize itself based on markers in MarkersControl
         try:
             self.markers.LoadState()
-        except:
+        except Exception:  # Replacing bare except with Exception
             self.session.DeleteStateFile()  # Delete state file if it is erroneous
 
         # Add all lines into main sizer
@@ -3209,7 +3228,7 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
         unique_menu_id = 1
 
         # Check if the currently focused marker is the active target.
-        is_active_target = focused_marker["is_target"]
+        focused_marker["is_target"]
 
         # Create the context menu.
         menu_id = wx.Menu()
@@ -4161,10 +4180,7 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
         if not filename:
             return
 
-        version_line = "%s%i\n" % (
-            const.MARKER_FILE_MAGICK_STRING,
-            const.CURRENT_MARKER_FILE_VERSION,
-        )
+        version_line = f"{const.MARKER_FILE_MAGICK_STRING}{const.CURRENT_MARKER_FILE_VERSION}\n"
         header_line = f"{Marker.to_csv_header()}\n"
         data_lines = [marker.to_csv_row() + "\n" for marker in self.markers.list]
         try:
@@ -4312,3 +4328,194 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
         # Focus on the added marker.
         if focus:
             self.FocusOnMarker(num_items)
+
+
+class NavigationParamDisplayPanel(wx.Panel):
+    """Panel to display the currently active navigation parameters"""
+
+    def __init__(self, parent, navigation):
+        wx.Panel.__init__(self, parent, style=wx.BORDER_THEME)
+
+        self.navigation = navigation
+        self.params = {}
+
+        # Create main panel sizer
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # Create a static box with title and professional look
+        box = wx.StaticBox(self, -1, _("Navigation Parameters"))
+        box.SetForegroundColour(wx.Colour(0, 70, 160))  # Professional blue color for title
+        box_sizer = wx.StaticBoxSizer(box, wx.VERTICAL)
+
+        # Create a scrolled window for parameters with better styling
+        self.scrolled_window = wx.ScrolledWindow(self, style=wx.VSCROLL)
+        self.scrolled_window.SetScrollRate(0, 5)
+        self.scrolled_window.SetBackgroundColour(wx.Colour(248, 248, 252))  # Light background
+        scroll_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # Parameter fields with more professional styling
+        self.grid_sizer = wx.FlexGridSizer(rows=0, cols=2, hgap=5, vgap=0)
+        self.grid_sizer.AddGrowableCol(1)
+
+        # Initially populate with basic fields
+        self.UpdateDisplay()
+
+        # Add grid to scroll sizer
+        scroll_sizer.Add(self.grid_sizer, 0, wx.EXPAND | wx.ALL, 2)
+        self.scrolled_window.SetSizer(scroll_sizer)
+
+        # Add scrolled window to box sizer
+        box_sizer.Add(self.scrolled_window, 1, wx.EXPAND | wx.ALL, 0)
+
+        # Add refresh button with improved styling
+        refresh_btn = wx.Button(self, -1, _("Refresh"), size=wx.Size(55, 22))
+        refresh_btn.SetForegroundColour(wx.Colour(0, 70, 160))  # Match title color
+        refresh_btn.Bind(wx.EVT_BUTTON, self.OnRefresh)
+        box_sizer.Add(refresh_btn, 0, wx.ALIGN_RIGHT | wx.BOTTOM | wx.RIGHT, 3)
+
+        main_sizer.Add(box_sizer, 1, wx.EXPAND | wx.ALL, 2)
+
+        self.SetSizer(main_sizer)
+        self.SetAutoLayout(1)
+
+        # Set a fixed size to fit in the available space - slightly taller to show more content
+        self.SetMinSize((155, 230))
+        self.SetMaxSize((155, 260))
+
+        # Bind to parameter update events
+        self.__bind_events()
+
+    def __bind_events(self):
+        Publisher.subscribe(self.OnNavigationTypeChanged, "Navigation type changed")
+        Publisher.subscribe(self.OnUpdateThresholds, "Update thresholds")
+        Publisher.subscribe(self.OnUpdateAngleThreshold, "Update coil angle projection threshold")
+        Publisher.subscribe(self.OnUpdateAccuracyMode, "Update accuracy mode")
+
+    def OnNavigationTypeChanged(self, navigation_type=None, params=None):
+        self.UpdateDisplay()
+
+    def OnUpdateThresholds(self, angle_threshold=None, distance_threshold=None):
+        if angle_threshold is not None:
+            self.params["angle_threshold"] = angle_threshold
+        if distance_threshold is not None:
+            self.params["distance_threshold"] = distance_threshold
+        self.UpdateDisplay()
+
+    def OnUpdateAngleThreshold(self, coil_angle_threshold=None):
+        if coil_angle_threshold is not None:
+            self.params["coil_angle_arrow_projection_threshold"] = coil_angle_threshold
+        self.UpdateDisplay()
+
+    def OnUpdateAccuracyMode(self, accuracy_mode=None):
+        if accuracy_mode is not None:
+            self.params["accuracy_mode"] = accuracy_mode
+        self.UpdateDisplay()
+
+    def OnRefresh(self, event):
+        self.UpdateDisplay()
+
+    def UpdateDisplay(self):
+        """Update the parameter display with current values"""
+        # Get current params from navigation
+        self.params = (
+            self.navigation.current_params.copy() if hasattr(self.navigation, "current_params") and self.navigation.current_params else {}
+        )
+
+        # Clear existing items
+        self.grid_sizer.Clear(delete_windows=True)
+
+        # Navigation type - with highlighting
+        nav_type = self.navigation.navigation_type
+        self.AddHeaderRow(_("Type:"), nav_type)
+
+        # Add separator line
+        separator = wx.StaticLine(self.scrolled_window)
+        self.grid_sizer.Add(separator, 0, wx.EXPAND | wx.TOP | wx.BOTTOM, 3)
+        self.grid_sizer.Add(
+            wx.StaticLine(self.scrolled_window), 0, wx.EXPAND | wx.TOP | wx.BOTTOM, 3
+        )
+
+        # Key parameters to display with units - in informative format
+        param_display = [
+            ("accuracy_mode", _("Accuracy:"), ""),
+            ("distance_threshold", _("Distance:"), "mm"),
+            ("angle_threshold", _("Angle:"), "°"),
+            ("coil_angle_arrow_projection_threshold", _("Coil angle:"), "°"),
+            ("sleep_nav", _("Update time:"), "s"),
+            ("sleep_coord", _("Coord time:"), "s"),
+            ("smoothing", _("Smoothing:"), ""),
+        ]
+
+        # Add each parameter to the grid
+        for param_key, label, unit in param_display:
+            value = self.params.get(param_key, "N/A")
+
+            if param_key == "accuracy_mode" and isinstance(value, int):
+                modes = {0: _("Standard"), 1: _("High"), 2: _("Maximum")}
+                display_value = modes.get(value, str(value))
+                # Format: "Accuracy: Maximum"
+                self.AddInformativeRow(label, display_value)
+            elif param_key == "smoothing" and isinstance(value, int):
+                smoothing = {0: _("None"), 1: _("Light"), 2: _("Medium")}
+                display_value = smoothing.get(value, str(value))
+                self.AddInformativeRow(label, display_value)
+            elif isinstance(value, int | float) and unit:  # Fix: Use | instead of tuple
+                # Format numbers with proper precision
+                if unit == "s":  # seconds, show fewer decimals
+                    display_value = f"{value:.2f} {unit}"
+                else:
+                    display_value = f"{value:.1f} {unit}"
+                self.AddInformativeRow(label, display_value)
+            else:
+                display_value = f"{value} {unit}" if unit and value != "N/A" else str(value)
+                self.AddInformativeRow(label, display_value)
+
+        # Force layout update
+        self.grid_sizer.Layout()
+        self.scrolled_window.FitInside()
+        self.Layout()
+
+    def AddHeaderRow(self, label, value):
+        """Add a header row with highlighted styling"""
+        header = wx.StaticText(self.scrolled_window, -1, label)
+        header.SetFont(wx.Font(8, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+
+        value_ctrl = wx.StaticText(self.scrolled_window, -1, str(value), style=wx.ST_ELLIPSIZE_END)
+        value_ctrl.SetFont(
+            wx.Font(8, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+        )
+        value_ctrl.SetForegroundColour(wx.Colour(0, 70, 160))  # Professional blue
+
+        self.grid_sizer.Add(header, 0, wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL)
+        self.grid_sizer.Add(value_ctrl, 1, wx.EXPAND | wx.ALIGN_CENTER_VERTICAL)
+
+    def AddInformativeRow(self, label, value):
+        """Add an informative parameter row with label: value format"""
+        # Create a panel to hold the row contents
+        row_panel = wx.Panel(self.scrolled_window)
+        row_panel.SetBackgroundColour(wx.Colour(248, 248, 252))  # Match parent background
+
+        # Create a sizer for the row
+        row_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # Add label with bold font
+        label_ctrl = wx.StaticText(row_panel, -1, label)
+        label_ctrl.SetFont(
+            wx.Font(8, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+        )
+        row_sizer.Add(label_ctrl, 0, wx.EXPAND)
+
+        # Add value with regular font and blue color
+        value_ctrl = wx.StaticText(row_panel, -1, str(value), style=wx.ST_ELLIPSIZE_END)
+        value_ctrl.SetFont(
+            wx.Font(8, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
+        )
+        value_ctrl.SetForegroundColour(wx.Colour(0, 0, 160))  # Blue for values
+        row_sizer.Add(value_ctrl, 0, wx.EXPAND | wx.TOP, 1)
+
+        # Set the panel's sizer
+        row_panel.SetSizer(row_sizer)
+
+        # Add the panel to the grid sizer, spanning both columns
+        self.grid_sizer.Add(row_panel, 0, wx.EXPAND | wx.TOP | wx.BOTTOM, 3)
+        self.grid_sizer.Add((0, 0))  # Empty cell for the second column

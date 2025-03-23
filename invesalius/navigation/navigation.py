@@ -284,6 +284,9 @@ class Navigation(metaclass=Singleton):
         self.coord_tracts_queue = QueueCustom(maxsize=1)
         self.tracts_queue = QueueCustom(maxsize=1)
 
+        # Store current navigation parameters for display
+        self.current_params = {}
+        
         # Tracker parameters
         self.ref_mode_id = const.DEFAULT_REF_MODE
 

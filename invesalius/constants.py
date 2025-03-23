@@ -19,7 +19,6 @@
 
 import itertools
 import sys
-from typing import Dict, List, Optional, Tuple, Union
 
 import psutil
 import wx
@@ -182,8 +181,8 @@ CROP_PAN = 13
 
 # Color Table from Slice
 # NumberOfColors, SaturationRange, HueRange, ValueRange
-SLICE_COLOR_TABLE: Dict[
-    str, Tuple[Optional[int], Tuple[int, int], Tuple[float, float], Tuple[int, int]]
+SLICE_COLOR_TABLE: dict[
+    str, tuple[int, tuple[float, float], tuple[float, float], tuple[float, float]]
 ] = {
     _("Default "): (None, (0, 0), (0, 0), (0, 1)),
     _("Hue"): (None, (1, 1), (0, 1), (1, 1)),
@@ -290,7 +289,7 @@ THRESHOLD_OUTVALUE = 0
 MASK_NAME_PATTERN = _("Mask %d")
 MASK_OPACITY = 0.40
 # MASK_OPACITY = 0.35
-MASK_COLOUR: List[List[float]] = [
+MASK_COLOUR: list[list[float]] = [
     [0.33, 1, 0.33],
     [1, 1, 0.33],
     [0.33, 0.91, 1],
@@ -312,7 +311,7 @@ MASK_COLOUR: List[List[float]] = [
 
 MEASURE_COLOUR = itertools.cycle([[1, 0, 0], [1, 0.4, 0], [0, 0, 1], [1, 0, 1], [0, 0.6, 0]])
 
-SURFACE_COLOUR: List[Tuple[float, float, float]] = [
+SURFACE_COLOUR: list[tuple[float, float, float]] = [
     (0.33, 1, 0.33),
     (1, 1, 0.33),
     (0.33, 0.91, 1),
@@ -374,7 +373,7 @@ SURFACE_SPACE_INV = 1
 SURFACE_SPACE_CHOICES = [_("world/scanner space"), _("InVesalius space")]
 
 # Imagedata - window and level presets
-WINDOW_LEVEL: Dict[str, Union[Tuple[int, int], Tuple[None, None]]] = {
+WINDOW_LEVEL: dict[str, tuple[int, int] | tuple[None, None]] = {
     _("Abdomen"): (350, 50),
     _("Bone"): (2000, 300),
     _("Brain posterior fossa"): (120, 40),
@@ -874,6 +873,50 @@ DEFAULT_REF_MODE = DYNAMIC_REF
 REF_MODE = [_("Static ref."), _("Dynamic ref.")]
 FT_SENSOR_MODE = [_("Sensor 3"), _("Sensor 4")]
 TRACKERS_WITH_SENSOR_OPTIONS = [FASTRAK, ISOTRAKII, PATRIOT, DEBUGTRACKRANDOM, DEBUGTRACKAPPROACH]
+
+# Navigation types and presets
+DEFAULT_NAVIGATION_TYPE = "Standard"
+NAVIGATION_TYPES = [DEFAULT_NAVIGATION_TYPE, "Precision", "Research"]
+
+# Navigation type presets - parameters for different navigation accuracy levels
+NAVIGATION_TYPE_PRESETS = {
+    "Standard": {
+        "description": _("Standard navigation mode with balanced speed and accuracy"),
+        "sleep_nav": 0.1,  # Navigation sleep time (seconds)
+        "sleep_coord": 0.1,  # Coordinate sleep time (seconds)
+        "calibration_tracker_samples": 10,  # Number of samples for calibration
+        "distance_threshold": 3,  # Distance threshold (mm)
+        "angle_threshold": 3,  # Angle threshold (degrees)
+        "coil_angle_arrow_projection_threshold": 5,  # Coil angle arrow projection threshold
+        "accuracy_mode": 0,  # Standard accuracy mode
+        "smoothing": 0,  # No smoothing
+        "fre_threshold": 3.0,  # Fiducial Registration Error threshold
+    },
+    "Precision": {
+        "description": _("High precision mode with lower refresh rate but increased accuracy"),
+        "sleep_nav": 0.15,  # Slower navigation sleep time for more precision
+        "sleep_coord": 0.15,  # Slower coordinate sleep time
+        "calibration_tracker_samples": 20,  # More samples for better calibration
+        "distance_threshold": 2,  # Lower distance threshold (mm)
+        "angle_threshold": 2,  # Lower angle threshold (degrees)
+        "coil_angle_arrow_projection_threshold": 3,  # Lower coil angle threshold
+        "accuracy_mode": 1,  # High accuracy mode
+        "smoothing": 1,  # Light smoothing
+        "fre_threshold": 2.0,  # Lower FRE threshold for higher accuracy
+    },
+    "Research": {
+        "description": _("Research mode with maximum accuracy and detailed data collection"),
+        "sleep_nav": 0.2,  # Slowest navigation sleep time for maximum precision
+        "sleep_coord": 0.2,  # Slowest coordinate sleep time
+        "calibration_tracker_samples": 30,  # Maximum samples for calibration
+        "distance_threshold": 1,  # Lowest distance threshold (mm)
+        "angle_threshold": 1,  # Lowest angle threshold (degrees)
+        "coil_angle_arrow_projection_threshold": 2,  # Lowest coil angle threshold
+        "accuracy_mode": 2,  # Maximum accuracy mode
+        "smoothing": 2,  # Medium smoothing
+        "fre_threshold": 1.5,  # Lowest FRE threshold for highest accuracy
+    },
+}
 
 DEFAULT_COIL = SELECT
 COIL = [_("Select coil:"), _("Neurosoft Figure-8"), _("Magstim 70 mm"), _("Nexstim")]

@@ -271,6 +271,14 @@ class Navigation(metaclass=Singleton):
         self.m_change = None
         self.r_stylus = None
         self.obj_datas = None  # This is accessed by the robot, gets value at StartNavigation
+        self.navigation_type = const.DEFAULT_NAVIGATION_TYPE
+        self.custom_navigation_types = []
+
+        # Navigation type parameters
+        self.navigation_type_params = {}
+
+        # Current navigation parameters
+        self.current_params = {}
 
         self.all_fiducials = np.zeros((6, 6))
         self.event = threading.Event()
@@ -330,6 +338,7 @@ class Navigation(metaclass=Singleton):
         Publisher.subscribe(self.SelectCoil, "Select coil")
         Publisher.subscribe(self.UpdateSerialPort, "Update serial port")
         Publisher.subscribe(self.TrackObject, "Track object")
+        Publisher.subscribe(self.SetNavigationType, "Set navigation type")
 
     def SaveConfig(self, key=None, value=None):
         """
@@ -341,6 +350,9 @@ class Navigation(metaclass=Singleton):
                 "selected_coils": list(self.coil_registrations),
                 "n_coils": self.n_coils,
                 "track_coil": self.track_coil,
+                "navigation_type": self.navigation_type,
+                "custom_navigation_types": self.custom_navigation_types,
+                "navigation_type_params": self.navigation_type_params,
             }
             if self.main_coil is not None:
                 state["main_coil"] = self.main_coil
@@ -355,33 +367,41 @@ class Navigation(metaclass=Singleton):
 
     def LoadConfig(self):
         session = ses.Session()
-        state = session.GetConfig("navigation")
+        state = session.GetConfig("navigation", {})
 
         # Get the dict of all coil_registrations saved to config file
         saved_coil_registrations = session.GetConfig("coil_registrations")
 
-        if state is not None:
-            self.main_coil = state.get("main_coil", None)
-            self.n_coils = state.get("n_coils", 1)
-            if self.n_coils == 1:
-                self.main_coil = "default_coil"
+        # Load navigation type settings
+        self.navigation_type = state.get("navigation_type", const.DEFAULT_NAVIGATION_TYPE)
+        self.custom_navigation_types = state.get("custom_navigation_types", [])
+        self.navigation_type_params = state.get("navigation_type_params", {})
 
-            self.track_coil = state.get("track_coil", False)
+        # Load existing settings
+        self.n_coils = state.get("n_coils", 1)
+        if self.n_coils == 1:
+            self.main_coil = "default_coil"
 
-            # Try to load selected_coils (the list of names of coils to use for navigation)
-            if ("selected_coils" in state) and (saved_coil_registrations is not None):
-                selected_coils = state["selected_coils"]
-                self.coil_registrations = {
-                    coil_name: saved_coil_registrations[coil_name]
-                    for coil_name in selected_coils
-                    if coil_name in saved_coil_registrations
-                }
-                if self.coil_registrations:
-                    self.main_coil = self.main_coil or next(iter(self.coil_registrations))
+        self.track_coil = state.get("track_coil", False)
+        self.main_coil = state.get("main_coil", None)
 
-            # Try to load stylus orientation data
-            if "r_stylus" in state:
-                self.r_stylus = np.array(state["r_stylus"])
+        # Try to load selected_coils (the list of names of coils to use for navigation)
+        if ("selected_coils" in state) and (saved_coil_registrations is not None):
+            selected_coils = state["selected_coils"]
+            self.coil_registrations = {
+                coil_name: saved_coil_registrations[coil_name]
+                for coil_name in selected_coils
+                if coil_name in saved_coil_registrations
+            }
+            if self.coil_registrations:
+                self.main_coil = self.main_coil or next(iter(self.coil_registrations))
+
+        # Try to load stylus orientation data
+        if "r_stylus" in state:
+            self.r_stylus = np.array(state["r_stylus"])
+
+        # Load current navigation parameters
+        self.LoadNavigationTypeParameters()
 
     def CoilSelectionDone(self):
         return len(self.coil_registrations) == self.n_coils
@@ -724,3 +744,292 @@ class Navigation(metaclass=Singleton):
             self.plot_efield_vectors,
         ]
         Publisher.sendMessage("Navigation status", nav_status=False, vis_status=vis_components)
+
+    def SetNavigationType(self, navigation_type):
+        """
+        Set the navigation type and save it to the configuration
+        """
+        print(f"Setting navigation type to: {navigation_type}")
+
+        # Only update if actually changing the type
+        if navigation_type != self.navigation_type:
+            self.navigation_type = navigation_type
+            self.SaveConfig("navigation_type", navigation_type)
+            print("Navigation type saved to config")
+
+            # Load and apply the parameters for the new navigation type
+            self.LoadNavigationTypeParameters()
+            print(f"Loaded parameters for navigation type: {self.navigation_type}")
+
+            # Apply the parameters
+            self.ApplyNavigationParameters()
+        else:
+            print(f"Navigation type already set to {navigation_type}, reapplying parameters")
+            self.LoadNavigationTypeParameters()
+            self.ApplyNavigationParameters()
+
+    def GetNavigationType(self):
+        """
+        Get the current navigation type
+        """
+        return self.navigation_type
+
+    def AddCustomNavigationType(self, navigation_type, parameters=None):
+        """
+        Add a custom navigation type with optional parameters
+
+        Args:
+            navigation_type (str): The name of the navigation type
+            parameters (dict, optional): Parameters for the navigation type
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        print(f"Adding custom navigation type: {navigation_type}")
+
+        # Check if type already exists
+        if (
+            navigation_type in self.custom_navigation_types
+            or navigation_type in const.NAVIGATION_TYPES
+        ):
+            print(f"Navigation type already exists: {navigation_type}")
+            return False
+
+        # Add to custom types
+        self.custom_navigation_types.append(navigation_type)
+        print(f"Added to custom navigation types: {self.custom_navigation_types}")
+
+        # Add parameters if provided
+        if parameters:
+            print(f"Adding parameters for {navigation_type}: {parameters}")
+            if self.navigation_type_params is None:
+                self.navigation_type_params = {}
+            self.navigation_type_params[navigation_type] = parameters
+
+        # Save configuration
+        self.SaveConfig()
+        print("Saved configuration after adding navigation type")
+
+        return True
+
+    def RemoveCustomNavigationType(self, navigation_type):
+        """
+        Remove a custom navigation type and its parameters
+
+        Args:
+            navigation_type (str): The name of the navigation type to remove
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        print(f"Removing custom navigation type: {navigation_type}")
+
+        # Check if it's a default type (which can't be removed)
+        if navigation_type in const.NAVIGATION_TYPES:
+            print(f"Cannot remove default navigation type: {navigation_type}")
+            return False
+
+        # Check if it exists in custom types
+        if navigation_type not in self.custom_navigation_types:
+            print(f"Navigation type not found in custom types: {navigation_type}")
+            return False
+
+        # Remove from custom types
+        self.custom_navigation_types.remove(navigation_type)
+        print(f"Removed from custom navigation types. Remaining: {self.custom_navigation_types}")
+
+        # Remove parameters if they exist
+        if self.navigation_type_params and navigation_type in self.navigation_type_params:
+            print(f"Removing parameters for {navigation_type}")
+            del self.navigation_type_params[navigation_type]
+
+        # If current navigation type is being removed, reset to default
+        if self.navigation_type == navigation_type:
+            print("Current navigation type was removed, resetting to default")
+            self.navigation_type = const.DEFAULT_NAVIGATION_TYPE
+            # Apply the default parameters
+            self.LoadNavigationTypeParameters()
+            self.ApplyNavigationParameters()
+
+        # Save configuration
+        self.SaveConfig()
+        print("Saved configuration after removing navigation type")
+
+        return True
+
+    def GetAllNavigationTypes(self):
+        """
+        Get all navigation types, including default and custom types
+        """
+        return const.NAVIGATION_TYPES + self.custom_navigation_types
+
+    def GetNavigationTypeParameters(self, navigation_type=None):
+        """
+        Get parameters for the specified navigation type. If none specified,
+        returns parameters for the current navigation type.
+
+        Args:
+            navigation_type (str, optional): The navigation type to get parameters for.
+                                          If None, uses the current navigation type.
+
+        Returns:
+            dict: The navigation parameters for the specified type
+        """
+        if navigation_type is None:
+            navigation_type = self.navigation_type
+
+        # First check if it's a custom type with custom parameters
+        if navigation_type in self.navigation_type_params:
+            return self.navigation_type_params[navigation_type]
+
+        # If it's a default type, return the preset parameters
+        if navigation_type in const.NAVIGATION_TYPE_PRESETS:
+            return const.NAVIGATION_TYPE_PRESETS[navigation_type]
+
+        # Fallback to Standard preset
+        return const.NAVIGATION_TYPE_PRESETS[const.DEFAULT_NAVIGATION_TYPE]
+
+    def UpdateNavigationTypeParameters(self, navigation_type, parameters):
+        """
+        Update parameters for a navigation type
+
+        Args:
+            navigation_type (str): The name of the navigation type
+            parameters (dict): The parameters to update
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        print(f"Updating parameters for navigation type: {navigation_type}")
+        print(f"New parameters: {parameters}")
+
+        # Only custom types can be updated
+        if navigation_type in const.NAVIGATION_TYPES:
+            print(f"Cannot update default navigation type: {navigation_type}")
+            return False
+
+        # Initialize parameters dictionary if needed
+        if self.navigation_type_params is None:
+            self.navigation_type_params = {}
+
+        # Update parameters
+        self.navigation_type_params[navigation_type] = parameters
+        print(f"Updated parameters for: {navigation_type}")
+
+        # If this is the current navigation type, apply parameters
+        if self.navigation_type == navigation_type:
+            print("Updating parameters for current navigation type")
+            self.current_params = parameters.copy()
+            self.ApplyNavigationParameters()
+
+        # Save configuration
+        self.SaveConfig()
+        print("Saved configuration after updating navigation type parameters")
+
+        return True
+
+    def LoadNavigationTypeParameters(self):
+        """
+        Load the parameters for the current navigation type
+        """
+        previous_params = self.current_params.copy() if self.current_params else {}
+        self.current_params = self.GetNavigationTypeParameters()
+
+        # Print parameter changes for debugging
+        if previous_params:
+            print(f"Navigation parameters changed from: {previous_params}")
+        print(f"Loaded navigation parameters for {self.navigation_type}: {self.current_params}")
+
+        # Ensure essential parameters are always present
+        if not self.current_params:
+            print(f"Warning: No parameters found for navigation type: {self.navigation_type}")
+            self.current_params = const.NAVIGATION_TYPE_PRESETS[
+                const.DEFAULT_NAVIGATION_TYPE
+            ].copy()
+            print(f"Using default parameters instead: {self.current_params}")
+
+        # Make sure sleep times are correctly set
+        if "sleep_nav" not in self.current_params:
+            self.current_params["sleep_nav"] = const.SLEEP_NAVIGATION
+            print(f"Setting default sleep_nav: {self.current_params['sleep_nav']}")
+
+        if "sleep_coord" not in self.current_params:
+            self.current_params["sleep_coord"] = const.SLEEP_COORDINATES
+            print(f"Setting default sleep_coord: {self.current_params['sleep_coord']}")
+
+    def ApplyNavigationParameters(self):
+        """
+        Apply the parameters for the current navigation type to the system.
+        """
+        if self.current_params:
+            print(f"Applying parameters for navigation type: {self.navigation_type}")
+
+            # Update sleep times
+            self.sleep_nav = self.current_params.get("sleep_nav", const.SLEEP_NAVIGATION)
+            sleep_coord = self.current_params.get("sleep_coord", const.SLEEP_COORDINATES)
+            print(f"Setting sleep_nav to {self.sleep_nav}")
+            print(f"Setting sleep_coord to {sleep_coord}")
+            Publisher.sendMessage("Update nav sleep", data=self.sleep_nav)
+            Publisher.sendMessage("Update coord sleep", data=sleep_coord)
+
+            # Update threshold parameters
+            distance_threshold = self.current_params.get(
+                "distance_threshold", const.DEFAULT_DISTANCE_THRESHOLD
+            )
+            print(f"Setting distance_threshold to {distance_threshold}")
+
+            angle_threshold = self.current_params.get(
+                "angle_threshold", const.DEFAULT_ANGLE_THRESHOLD
+            )
+            print(f"Setting angle_threshold to {angle_threshold}")
+
+            # Send the threshold updates in a single message
+            Publisher.sendMessage(
+                "Update thresholds",
+                angle_threshold=angle_threshold,
+                distance_threshold=distance_threshold,
+            )
+
+            coil_angle_arrow_projection_threshold = self.current_params.get(
+                "coil_angle_arrow_projection_threshold", const.COIL_ANGLE_ARROW_PROJECTION_THRESHOLD
+            )
+            print(
+                f"Setting coil_angle_arrow_projection_threshold to {coil_angle_arrow_projection_threshold}"
+            )
+            Publisher.sendMessage(
+                "Update coil angle projection threshold",
+                coil_angle_threshold=coil_angle_arrow_projection_threshold,
+            )
+
+            fre_threshold = self.current_params.get(
+                "fre_threshold", const.FIDUCIAL_REGISTRATION_ERROR_THRESHOLD
+            )
+            print(f"Setting fre_threshold to {fre_threshold}")
+            Publisher.sendMessage("Update FRE threshold", fre_threshold=fre_threshold)
+
+            # Apply additional parameters
+            accuracy_mode = self.current_params.get("accuracy_mode", 0)
+            print(f"Setting accuracy_mode to {accuracy_mode}")
+            Publisher.sendMessage("Update accuracy mode", accuracy_mode=accuracy_mode)
+
+            smoothing = self.current_params.get("smoothing", 0)
+            print(f"Setting smoothing to {smoothing}")
+            Publisher.sendMessage("Update smoothing", smoothing=smoothing)
+
+            # Save the parameters to the session config
+            session = ses.Session()
+            session.SetConfig("sleep_nav", self.sleep_nav)
+            session.SetConfig("sleep_coord", sleep_coord)
+
+            # Notify other components about the navigation type change
+            Publisher.sendMessage(
+                "Navigation type changed",
+                navigation_type=self.navigation_type,
+                params=self.current_params,
+            )
+        else:
+            print(f"Warning: No parameters found for navigation type: {self.navigation_type}")
+            self.LoadNavigationTypeParameters()
+            if self.current_params:
+                print("Loaded parameters, calling ApplyNavigationParameters again")
+                self.ApplyNavigationParameters()

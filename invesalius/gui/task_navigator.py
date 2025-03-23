@@ -62,17 +62,6 @@ from invesalius.i18n import tr as _
 from invesalius.navigation.navigation import NavigationHub
 from invesalius.navigation.robot import RobotObjective
 from invesalius.pubsub import pub as Publisher
-from invesalius.navigation.diagnostics import (
-    ConnectionStatus,
-    DeviceType,
-    DiagnosticStatus,
-    run_diagnostic_tests,
-)
-from invesalius.enhanced_logging import EnhancedLogger
-from invesalius.gui.connection_logs_dialog import ConnectionLogsDialog
-
-# Get logger
-logger = EnhancedLogger.get_logger("invesalius.gui.task_navigator")
 
 BTN_NEW = wx.NewIdRef()
 BTN_IMPORT_LOCAL = wx.NewIdRef()
@@ -295,7 +284,7 @@ class InnerFoldPanel(wx.Panel):
             self.fold_panel.Collapse(self.nav_panel)
 
     def OnFoldPressCaption(self, evt):
-        id = evt.GetTag().GetId()
+        # id = evt.GetTag().GetId()  # Unused variable
         expanded = evt.GetFoldStatus()
 
         if not expanded:
@@ -1799,36 +1788,40 @@ class NavigationPanel(wx.Panel):
 
         self.__bind_events()
 
+        # Create panels directly on this panel
         self.control_panel = ControlPanel(self, nav_hub)
         self.marker_panel = MarkersPanel(self, nav_hub)
-        self.connection_status_panel = ConnectionStatusPanel(self, nav_hub)
+        self.param_display_panel = NavigationParamDisplayPanel(self, nav_hub.navigation)
 
+        # Set up layout
         top_sizer = wx.BoxSizer(wx.HORIZONTAL)
         top_sizer.Add(self.marker_panel, 1, wx.GROW | wx.EXPAND)
 
-        connection_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        connection_sizer.Add(self.connection_status_panel, 1, wx.EXPAND | wx.TOP, 5)
-
+        # Create bottom sizer with more space for controls
         bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        bottom_sizer.Add(self.control_panel, 0, wx.EXPAND | wx.TOP, 5)
+        # Give the control panel more space horizontally
+        bottom_sizer.Add(self.control_panel, 1, wx.EXPAND)
+        # Add parameter panel with appropriate position
+        bottom_sizer.Add(self.param_display_panel, 0, wx.EXPAND | wx.LEFT, 5)
 
         main_sizer = wx.BoxSizer(wx.VERTICAL)
-        main_sizer.AddMany(
-            [
-                (top_sizer, 1, wx.EXPAND | wx.GROW),
-                (connection_sizer, 0, wx.EXPAND | wx.GROW),
-                (bottom_sizer, 0, wx.ALIGN_CENTER_HORIZONTAL),
-            ]
-        )
+        main_sizer.Add(top_sizer, 1, wx.EXPAND | wx.GROW)
+        # Ensure the bottom section has enough vertical space
+        main_sizer.Add(bottom_sizer, 0, wx.EXPAND | wx.TOP, 5)
+
         self.sizer = main_sizer
-        self.SetSizerAndFit(main_sizer)
-        self.Update()
+        self.SetSizer(main_sizer)
+
+        # Force update of layout
+        self.Layout()
+        main_sizer.SetSizeHints(self)
 
     def __bind_events(self):
         Publisher.subscribe(self.OnCloseProject, "Close project data")
         Publisher.subscribe(self.OnUpdateNavigationPanel, "Update navigation panel")
 
     def OnUpdateNavigationPanel(self):
+        self.Layout()
         self.sizer.Fit(self)
         if self.GetParent().IsExpanded():
             self.GetParent().Fit()
@@ -1842,7 +1835,7 @@ class NavigationPanel(wx.Panel):
         Publisher.sendMessage("Update marker offset state", create=False)
         Publisher.sendMessage("Remove tracts")
         Publisher.sendMessage("Disable style", style=const.SLICE_STATE_CROSS)
-        # TODO: Reset camera initial focus
+        # Reset camera initial focus
         Publisher.sendMessage("Reset cam clipping range")
         self.navigation.StopNavigation()
         self.navigation.__init__(
@@ -2098,24 +2091,19 @@ class ControlPanel(wx.Panel):
             ]
         )
 
-        navigation_buttons_sizer = wx.FlexGridSizer(4, 5, 5)
+        # Using a 3x4 grid for better button arrangement (3 rows, 4 columns maximum)
+        navigation_buttons_sizer = wx.GridSizer(rows=3, cols=4, hgap=5, vgap=5)
         navigation_buttons_sizer.AddMany(
             [
-                (tractography_checkbox),
-                (target_mode_button),
                 (track_object_button),
-                (checkbox_serial_port),
-                (efield_checkbox),
-                (lock_to_target_button),
                 (show_coil_button),
                 (show_probe_button),
+                (checkbox_serial_port),
+                (tractography_checkbox),
+                (efield_checkbox),
+                (target_mode_button),
+                (lock_to_target_button),
                 (show_motor_map_button),
-            ]
-        )
-
-        robot_buttons_sizer = wx.FlexGridSizer(4, 5, 5)
-        robot_buttons_sizer.AddMany(
-            [
                 (robot_track_target_button),
                 (robot_move_away_button),
                 (robot_free_drive_button),
@@ -2125,9 +2113,8 @@ class ControlPanel(wx.Panel):
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         main_sizer.AddMany(
             [
-                (start_navigation_button_sizer, 0, wx.EXPAND | wx.ALL, 10),
-                (navigation_buttons_sizer, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.TOP | wx.BOTTOM, 10),
-                (robot_buttons_sizer, 0, wx.ALIGN_LEFT | wx.TOP | wx.BOTTOM, 5),
+                (start_navigation_button_sizer, 0, wx.EXPAND | wx.ALL, 5),
+                (navigation_buttons_sizer, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.ALL, 5),
             ]
         )
 
@@ -2483,7 +2470,14 @@ class ControlPanel(wx.Panel):
         self.UpdateToggleButton(ctrl)
 
     # 'Target mode' button
-    def TrackObject(self, enabled):
+    def TrackObject(self, enabled=None):
+        if enabled is None:
+            # If no parameter is provided, don't change the state
+            return
+
+        # Original implementation continues here
+        Publisher.sendMessage("Track object state", track_object=enabled)
+
         self.UpdateTargetButton()
 
     def ShowTargetButton(self):
@@ -2814,7 +2808,7 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
         # In the future, it would be better if the panel could initialize itself based on markers in MarkersControl
         try:
             self.markers.LoadState()
-        except:
+        except Exception:  # Replacing bare except with Exception
             self.session.DeleteStateFile()  # Delete state file if it is erroneous
 
         # Add all lines into main sizer
@@ -3234,7 +3228,7 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
         unique_menu_id = 1
 
         # Check if the currently focused marker is the active target.
-        is_active_target = focused_marker["is_target"]
+        focused_marker["is_target"]
 
         # Create the context menu.
         menu_id = wx.Menu()
@@ -4186,10 +4180,7 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
         if not filename:
             return
 
-        version_line = "%s%i\n" % (
-            const.MARKER_FILE_MAGICK_STRING,
-            const.CURRENT_MARKER_FILE_VERSION,
-        )
+        version_line = f"{const.MARKER_FILE_MAGICK_STRING}{const.CURRENT_MARKER_FILE_VERSION}\n"
         header_line = f"{Marker.to_csv_header()}\n"
         data_lines = [marker.to_csv_row() + "\n" for marker in self.markers.list]
         try:
@@ -4339,251 +4330,192 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
             self.FocusOnMarker(num_items)
 
 
-class ConnectionStatusPanel(wx.Panel):
-    """Panel for displaying connection status and diagnostics for navigation devices"""
-    def __init__(self, parent, nav_hub):
+class NavigationParamDisplayPanel(wx.Panel):
+    """Panel to display the currently active navigation parameters"""
+
+    def __init__(self, parent, navigation):
         wx.Panel.__init__(self, parent, style=wx.BORDER_THEME)
-        
-        self.nav_hub = nav_hub
-        self.tracker = nav_hub.tracker
-        self.robot = nav_hub.robot
-        
-        # Timer for auto-refresh
-        self.refresh_timer = wx.Timer(self)
-        self.Bind(wx.EVT_TIMER, self.UpdateStatus, self.refresh_timer)
-        
-        # Main panel title
-        title = wx.StaticText(self, -1, _("Connection Status Dashboard"))
-        title.SetFont(wx.Font(10, wx.DEFAULT, wx.NORMAL, wx.BOLD))
-        
-        # Create device status panels
-        self.tracker_panel = self._create_device_panel(DeviceType.TRACKER, _("Tracker"))
-        self.robot_panel = self._create_device_panel(DeviceType.ROBOT, _("Robot"))
-        
-        # Run diagnostics button
-        btn_run_diagnostics = wx.Button(self, -1, _("Run Diagnostics"))
-        btn_run_diagnostics.Bind(wx.EVT_BUTTON, self.OnRunDiagnostics)
-        
-        # Toggle auto-refresh
-        self.auto_refresh_check = wx.CheckBox(self, -1, _("Auto-refresh (2s)"))
-        self.auto_refresh_check.SetValue(True)
-        self.auto_refresh_check.Bind(wx.EVT_CHECKBOX, self.OnToggleAutoRefresh)
-        
-        # Create refresh button
-        btn_refresh = wx.Button(self, -1, _("Refresh"))
-        btn_refresh.Bind(wx.EVT_BUTTON, self.OnRefresh)
-        
-        # Create bottom button sizer
-        bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        bottom_sizer.Add(btn_run_diagnostics, 0, wx.RIGHT, 5)
-        bottom_sizer.Add(self.auto_refresh_check, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        bottom_sizer.Add(btn_refresh, 0)
-        
-        # Create main sizer and add components
+
+        self.navigation = navigation
+        self.params = {}
+
+        # Create main panel sizer
         main_sizer = wx.BoxSizer(wx.VERTICAL)
-        main_sizer.Add(title, 0, wx.ALL, 5)
-        main_sizer.Add(wx.StaticLine(self, -1), 0, wx.EXPAND | wx.ALL, 2)
-        main_sizer.Add(self.tracker_panel, 0, wx.EXPAND | wx.ALL, 5)
-        main_sizer.Add(self.robot_panel, 0, wx.EXPAND | wx.ALL, 5)
-        main_sizer.Add(wx.StaticLine(self, -1), 0, wx.EXPAND | wx.ALL, 2)
-        main_sizer.Add(bottom_sizer, 0, wx.ALL, 5)
-        
+
+        # Create a static box with title and professional look
+        box = wx.StaticBox(self, -1, _("Navigation Parameters"))
+        box.SetForegroundColour(wx.Colour(0, 70, 160))  # Professional blue color for title
+        box_sizer = wx.StaticBoxSizer(box, wx.VERTICAL)
+
+        # Create a scrolled window for parameters with better styling
+        self.scrolled_window = wx.ScrolledWindow(self, style=wx.VSCROLL)
+        self.scrolled_window.SetScrollRate(0, 5)
+        self.scrolled_window.SetBackgroundColour(wx.Colour(248, 248, 252))  # Light background
+        scroll_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # Parameter fields with more professional styling
+        self.grid_sizer = wx.FlexGridSizer(rows=0, cols=2, hgap=5, vgap=0)
+        self.grid_sizer.AddGrowableCol(1)
+
+        # Initially populate with basic fields
+        self.UpdateDisplay()
+
+        # Add grid to scroll sizer
+        scroll_sizer.Add(self.grid_sizer, 0, wx.EXPAND | wx.ALL, 2)
+        self.scrolled_window.SetSizer(scroll_sizer)
+
+        # Add scrolled window to box sizer
+        box_sizer.Add(self.scrolled_window, 1, wx.EXPAND | wx.ALL, 0)
+
+        # Add refresh button with improved styling
+        refresh_btn = wx.Button(self, -1, _("Refresh"), size=wx.Size(55, 22))
+        refresh_btn.SetForegroundColour(wx.Colour(0, 70, 160))  # Match title color
+        refresh_btn.Bind(wx.EVT_BUTTON, self.OnRefresh)
+        box_sizer.Add(refresh_btn, 0, wx.ALIGN_RIGHT | wx.BOTTOM | wx.RIGHT, 3)
+
+        main_sizer.Add(box_sizer, 1, wx.EXPAND | wx.ALL, 2)
+
         self.SetSizer(main_sizer)
-        self.Layout()
-        
-        # Set up event bindings
+        self.SetAutoLayout(1)
+
+        # Set a fixed size to fit in the available space - slightly taller to show more content
+        self.SetMinSize((155, 230))
+        self.SetMaxSize((155, 260))
+
+        # Bind to parameter update events
         self.__bind_events()
-        
-        # Start the refresh timer
-        self.refresh_timer.Start(2000)  # Refresh every 2 seconds
-        
-        # Initial status update
-        self.UpdateStatus()
-    
+
     def __bind_events(self):
-        Publisher.subscribe(self.OnTrackerConnected, "Tracker connected")
-        Publisher.subscribe(self.OnTrackerDisconnected, "Tracker disconnected")
-        Publisher.subscribe(self.OnRobotConnectionStatus, "Robot to Neuronavigation: Robot connection status")
-    
-    def _create_device_panel(self, device_type, label):
-        """Create a panel for a specific device type"""
-        panel = wx.Panel(self, style=wx.BORDER_SIMPLE)
-        
-        # Device name
-        device_name = wx.StaticText(panel, -1, label)
-        device_name.SetFont(wx.Font(9, wx.DEFAULT, wx.NORMAL, wx.BOLD))
-        
-        # Status indicator
-        status_label = wx.StaticText(panel, -1, _("Status:"))
-        self.status_indicators = getattr(self, "status_indicators", {})
-        self.status_indicators[device_type] = wx.StaticText(panel, -1, _("Unknown"))
-        
-        # Details
-        details_label = wx.StaticText(panel, -1, _("Details:"))
-        self.details_text = getattr(self, "details_text", {})
-        self.details_text[device_type] = wx.StaticText(panel, -1, "")
-        
-        # Last update
-        last_update_label = wx.StaticText(panel, -1, _("Last updated:"))
-        self.last_update_text = getattr(self, "last_update_text", {})
-        self.last_update_text[device_type] = wx.StaticText(panel, -1, "")
-        
-        # Diagnostics results
-        diagnostics_label = wx.StaticText(panel, -1, _("Diagnostics:"))
-        self.diagnostics_text = getattr(self, "diagnostics_text", {})
-        self.diagnostics_text[device_type] = wx.StaticText(panel, -1, _("No diagnostics run"))
-        
-        # View logs button
-        btn_view_logs = wx.Button(panel, -1, _("View Logs"), style=wx.BU_EXACTFIT)
-        device_id = device_type.value
-        btn_view_logs.Bind(wx.EVT_BUTTON, lambda evt, dt=device_type: self.OnViewLogs(evt, dt))
-        
-        # Create grid sizer for labels and values
-        grid = wx.FlexGridSizer(rows=4, cols=2, vgap=5, hgap=10)
-        grid.AddGrowableCol(1)
-        
-        grid.Add(status_label, 0, wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL)
-        grid.Add(self.status_indicators[device_type], 0, wx.EXPAND)
-        
-        grid.Add(details_label, 0, wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL)
-        grid.Add(self.details_text[device_type], 0, wx.EXPAND)
-        
-        grid.Add(last_update_label, 0, wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL)
-        grid.Add(self.last_update_text[device_type], 0, wx.EXPAND)
-        
-        grid.Add(diagnostics_label, 0, wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL)
-        grid.Add(self.diagnostics_text[device_type], 0, wx.EXPAND)
-        
-        # Create main sizer and add components
-        sizer = wx.BoxSizer(wx.VERTICAL)
-        sizer.Add(device_name, 0, wx.ALL, 5)
-        sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 5)
-        sizer.Add(btn_view_logs, 0, wx.ALL | wx.ALIGN_RIGHT, 5)
-        
-        panel.SetSizer(sizer)
-        return panel
-    
-    def UpdateStatus(self, evt=None):
-        """Update the status display for all devices"""
-        self._update_device_status(DeviceType.TRACKER, self.tracker)
-        self._update_device_status(DeviceType.ROBOT, self.robot)
-    
-    def _update_device_status(self, device_type, device):
-        """Update status display for a specific device"""
-        if device_type == DeviceType.TRACKER:
-            is_connected = device.IsConnected()
-            device_info = f"Device: {device.tracker_id}" if device.tracker_id else ""
-        elif device_type == DeviceType.ROBOT:
-            is_connected = device.IsConnected()
-            device_info = f"IP: {device.robot_ip}" if device.robot_ip else ""
-        else:
-            return
-        
-        # Update status
-        status = ConnectionStatus.CONNECTED if is_connected else ConnectionStatus.DISCONNECTED
-        status_text = status.name
-        status_indicator = self.status_indicators[device_type]
-        
-        # Set color based on status
-        if status == ConnectionStatus.CONNECTED:
-            status_indicator.SetForegroundColour(wx.Colour(0, 128, 0))  # Green
-            status_text = _("CONNECTED")
-        elif status == ConnectionStatus.READY:
-            status_indicator.SetForegroundColour(wx.Colour(0, 128, 0))  # Green
-            status_text = _("READY")
-        elif status == ConnectionStatus.CONNECTING:
-            status_indicator.SetForegroundColour(wx.Colour(255, 128, 0))  # Orange
-            status_text = _("CONNECTING")
-        else:
-            status_indicator.SetForegroundColour(wx.Colour(255, 0, 0))  # Red
-            status_text = _("DISCONNECTED")
-        
-        status_indicator.SetLabel(status_text)
-        
-        # Update details
-        self.details_text[device_type].SetLabel(device_info)
-        
-        # Update last updated
-        now = time.strftime("%H:%M:%S")
-        self.last_update_text[device_type].SetLabel(now)
-    
-    def OnRunDiagnostics(self, evt):
-        """Run diagnostics for all devices"""
-        # Tracker diagnostics
-        tracker_results = self.tracker.run_diagnostics()
-        self._update_diagnostics_text(DeviceType.TRACKER, tracker_results)
-        
-        # Robot diagnostics
-        robot_results = self.robot.run_diagnostics()
-        self._update_diagnostics_text(DeviceType.ROBOT, robot_results)
-        
-        # Refresh the UI
+        Publisher.subscribe(self.OnNavigationTypeChanged, "Navigation type changed")
+        Publisher.subscribe(self.OnUpdateThresholds, "Update thresholds")
+        Publisher.subscribe(self.OnUpdateAngleThreshold, "Update coil angle projection threshold")
+        Publisher.subscribe(self.OnUpdateAccuracyMode, "Update accuracy mode")
+
+    def OnNavigationTypeChanged(self, navigation_type=None, params=None):
+        self.UpdateDisplay()
+
+    def OnUpdateThresholds(self, angle_threshold=None, distance_threshold=None):
+        if angle_threshold is not None:
+            self.params["angle_threshold"] = angle_threshold
+        if distance_threshold is not None:
+            self.params["distance_threshold"] = distance_threshold
+        self.UpdateDisplay()
+
+    def OnUpdateAngleThreshold(self, coil_angle_threshold=None):
+        if coil_angle_threshold is not None:
+            self.params["coil_angle_arrow_projection_threshold"] = coil_angle_threshold
+        self.UpdateDisplay()
+
+    def OnUpdateAccuracyMode(self, accuracy_mode=None):
+        if accuracy_mode is not None:
+            self.params["accuracy_mode"] = accuracy_mode
+        self.UpdateDisplay()
+
+    def OnRefresh(self, event):
+        self.UpdateDisplay()
+
+    def UpdateDisplay(self):
+        """Update the parameter display with current values"""
+        # Get current params from navigation
+        self.params = (
+            self.navigation.current_params.copy() if self.navigation.current_params else {}
+        )
+
+        # Clear existing items
+        self.grid_sizer.Clear(delete_windows=True)
+
+        # Navigation type - with highlighting
+        nav_type = self.navigation.navigation_type
+        self.AddHeaderRow(_("Type:"), nav_type)
+
+        # Add separator line
+        separator = wx.StaticLine(self.scrolled_window)
+        self.grid_sizer.Add(separator, 0, wx.EXPAND | wx.TOP | wx.BOTTOM, 3)
+        self.grid_sizer.Add(
+            wx.StaticLine(self.scrolled_window), 0, wx.EXPAND | wx.TOP | wx.BOTTOM, 3
+        )
+
+        # Key parameters to display with units - in informative format
+        param_display = [
+            ("accuracy_mode", _("Accuracy:"), ""),
+            ("distance_threshold", _("Distance:"), "mm"),
+            ("angle_threshold", _("Angle:"), "°"),
+            ("coil_angle_arrow_projection_threshold", _("Coil angle:"), "°"),
+            ("sleep_nav", _("Update time:"), "s"),
+            ("sleep_coord", _("Coord time:"), "s"),
+            ("smoothing", _("Smoothing:"), ""),
+        ]
+
+        # Add each parameter to the grid
+        for param_key, label, unit in param_display:
+            value = self.params.get(param_key, "N/A")
+
+            if param_key == "accuracy_mode" and isinstance(value, int):
+                modes = {0: _("Standard"), 1: _("High"), 2: _("Maximum")}
+                display_value = modes.get(value, str(value))
+                # Format: "Accuracy: Maximum"
+                self.AddInformativeRow(label, display_value)
+            elif param_key == "smoothing" and isinstance(value, int):
+                smoothing = {0: _("None"), 1: _("Light"), 2: _("Medium")}
+                display_value = smoothing.get(value, str(value))
+                self.AddInformativeRow(label, display_value)
+            elif isinstance(value, int | float) and unit:  # Fix: Use | instead of tuple
+                # Format numbers with proper precision
+                if unit == "s":  # seconds, show fewer decimals
+                    display_value = f"{value:.2f} {unit}"
+                else:
+                    display_value = f"{value:.1f} {unit}"
+                self.AddInformativeRow(label, display_value)
+            else:
+                display_value = f"{value} {unit}" if unit and value != "N/A" else str(value)
+                self.AddInformativeRow(label, display_value)
+
+        # Force layout update
+        self.grid_sizer.Layout()
+        self.scrolled_window.FitInside()
         self.Layout()
-    
-    def _update_diagnostics_text(self, device_type, results):
-        """Update the diagnostics text based on results"""
-        if not results:
-            self.diagnostics_text[device_type].SetLabel(_("No results"))
-            return
-        
-        # Count results by status
-        status_count = {DiagnosticStatus.PASSED: 0, DiagnosticStatus.WARNING: 0, DiagnosticStatus.FAILED: 0}
-        for result in results:
-            status_count[result.status] = status_count.get(result.status, 0) + 1
-        
-        # Create the status text
-        text = f"{status_count[DiagnosticStatus.PASSED]} {_('passed')}, "
-        text += f"{status_count[DiagnosticStatus.WARNING]} {_('warnings')}, "
-        text += f"{status_count[DiagnosticStatus.FAILED]} {_('failed')}"
-        
-        self.diagnostics_text[device_type].SetLabel(text)
-        
-        # Set color based on results
-        if status_count[DiagnosticStatus.FAILED] > 0:
-            self.diagnostics_text[device_type].SetForegroundColour(wx.Colour(255, 0, 0))  # Red
-        elif status_count[DiagnosticStatus.WARNING] > 0:
-            self.diagnostics_text[device_type].SetForegroundColour(wx.Colour(255, 128, 0))  # Orange
-        else:
-            self.diagnostics_text[device_type].SetForegroundColour(wx.Colour(0, 128, 0))  # Green
-    
-    def OnViewLogs(self, evt, device_type):
-        """Show the connection logs for the specified device"""
-        if device_type == DeviceType.TRACKER:
-            device = self.tracker
-        elif device_type == DeviceType.ROBOT:
-            device = self.robot
-        else:
-            return
-        
-        # Get connection history
-        history = device.get_connection_history()
-        if not history:
-            wx.MessageBox(_("No connection logs available for this device."), _("Connection Logs"))
-            return
-        
-        # Create a dialog to display logs
-        with ConnectionLogsDialog(self, device_type.name, history) as dialog:
-            dialog.ShowModal()
-    
-    def OnRefresh(self, evt):
-        """Manual refresh of the status display"""
-        self.UpdateStatus()
-    
-    def OnToggleAutoRefresh(self, evt):
-        """Toggle automatic refresh"""
-        if self.auto_refresh_check.GetValue():
-            self.refresh_timer.Start(2000)
-        else:
-            self.refresh_timer.Stop()
-    
-    def OnTrackerConnected(self):
-        """Handle tracker connected event"""
-        self.UpdateStatus()
-    
-    def OnTrackerDisconnected(self):
-        """Handle tracker disconnected event"""
-        self.UpdateStatus()
-    
-    def OnRobotConnectionStatus(self, data):
-        """Handle robot connection status event"""
-        self.UpdateStatus()
+
+    def AddHeaderRow(self, label, value):
+        """Add a header row with highlighted styling"""
+        header = wx.StaticText(self.scrolled_window, -1, label)
+        header.SetFont(wx.Font(8, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+
+        value_ctrl = wx.StaticText(self.scrolled_window, -1, str(value), style=wx.ST_ELLIPSIZE_END)
+        value_ctrl.SetFont(
+            wx.Font(8, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+        )
+        value_ctrl.SetForegroundColour(wx.Colour(0, 70, 160))  # Professional blue
+
+        self.grid_sizer.Add(header, 0, wx.ALIGN_LEFT | wx.ALIGN_CENTER_VERTICAL)
+        self.grid_sizer.Add(value_ctrl, 1, wx.EXPAND | wx.ALIGN_CENTER_VERTICAL)
+
+    def AddInformativeRow(self, label, value):
+        """Add an informative parameter row with label: value format"""
+        # Create a panel to hold the row contents
+        row_panel = wx.Panel(self.scrolled_window)
+        row_panel.SetBackgroundColour(wx.Colour(248, 248, 252))  # Match parent background
+
+        # Create a sizer for the row
+        row_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # Add label with bold font
+        label_ctrl = wx.StaticText(row_panel, -1, label)
+        label_ctrl.SetFont(
+            wx.Font(8, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+        )
+        row_sizer.Add(label_ctrl, 0, wx.EXPAND)
+
+        # Add value with regular font and blue color
+        value_ctrl = wx.StaticText(row_panel, -1, str(value), style=wx.ST_ELLIPSIZE_END)
+        value_ctrl.SetFont(
+            wx.Font(8, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
+        )
+        value_ctrl.SetForegroundColour(wx.Colour(0, 0, 160))  # Blue for values
+        row_sizer.Add(value_ctrl, 0, wx.EXPAND | wx.TOP, 1)
+
+        # Set the panel's sizer
+        row_panel.SetSizer(row_sizer)
+
+        # Add the panel to the grid sizer, spanning both columns
+        self.grid_sizer.Add(row_panel, 0, wx.EXPAND | wx.TOP | wx.BOTTOM, 3)
+        self.grid_sizer.Add((0, 0))  # Empty cell for the second column

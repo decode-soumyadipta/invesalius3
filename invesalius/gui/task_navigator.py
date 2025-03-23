@@ -4425,7 +4425,7 @@ class NavigationParamDisplayPanel(wx.Panel):
         self.grid_sizer.Clear(delete_windows=True)
 
         # Navigation type - with highlighting
-        nav_type = self.navigation.navigation_type
+        nav_type = getattr(self.navigation, "navigation_type", _("Standard"))
         self.AddHeaderRow(_("Type:"), nav_type)
 
         # Add separator line

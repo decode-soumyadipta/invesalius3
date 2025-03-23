@@ -287,6 +287,9 @@ class Navigation(metaclass=Singleton):
         # Store current navigation parameters for display
         self.current_params = {}
         
+        # Navigation type and parameters
+        self.navigation_type = _("Standard")
+        
         # Tracker parameters
         self.ref_mode_id = const.DEFAULT_REF_MODE
 

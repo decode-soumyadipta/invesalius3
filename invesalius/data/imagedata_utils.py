@@ -31,6 +31,7 @@ from vtkmodules.util import numpy_support
 from vtkmodules.vtkCommonDataModel import vtkImageData
 from vtkmodules.vtkFiltersCore import vtkImageAppend
 from vtkmodules.vtkImagingCore import vtkExtractVOI, vtkImageClip, vtkImageResample
+from vtkmodules.vtkCommonDataModel import vtkImageData
 from vtkmodules.vtkImagingGeneral import vtkImageGaussianSmooth
 from vtkmodules.vtkInteractionImage import vtkImageViewer
 from vtkmodules.vtkIOXML import vtkXMLImageDataReader, vtkXMLImageDataWriter

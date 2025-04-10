@@ -37,6 +37,7 @@ import invesalius.data.imagedata_utils as iu
 import invesalius.reader.dicom as dicom
 import invesalius.reader.dicom_grouper as dicom_grouper
 import invesalius.utils as utils
+import invesalius.data.imagedata_utils as iu
 from invesalius import inv_paths
 from invesalius.data import imagedata_utils
 from invesalius.enhanced_logging import get_logger
@@ -68,6 +69,7 @@ if sys.platform == "win32":
         _has_win32api = True
     except ImportError:
         _has_win32api = False
+        logger.warning("win32api module not found, using regular paths")
         logger.warning("win32api module not found, using regular paths")
 else:
     _has_win32api = False
@@ -132,6 +134,7 @@ def SortFiles(filelist, dicom):
     # Getting organized image
     filelist = sorter.GetFilenames()
     logger.debug(f"Sorted {len(filelist)} DICOM files")
+    logger.debug(f"Sorted {len(filelist)} DICOM files")
 
     return filelist
 
@@ -141,6 +144,7 @@ main_dict = {}
 dict_file = {}
 
 
+class DicomFileLoader:
 class DicomFileLoader:
     def __init__(self, grouper, filepath):
         self.grouper = grouper
@@ -206,6 +210,7 @@ class DicomFileLoader:
                     except KeyError:
                         encoding = "ISO_IR 100"
                         logger.warning(f"Unknown DICOM encoding: {encoding_value}, using default")
+                        logger.warning(f"Unknown DICOM encoding: {encoding_value}, using default")
             else:
                 encoding = "ISO_IR 100"
 
@@ -267,6 +272,7 @@ class DicomFileLoader:
                 level = None
                 window = None
                 logger.debug("No window/level found in DICOM header")
+                logger.debug("No window/level found in DICOM header")
 
             img = reader.GetImage()
             thumbnail_path = imagedata_utils.create_dicom_thumbnails(img, window, level)
@@ -280,6 +286,7 @@ class DicomFileLoader:
             except TypeError:
                 _type = orientation.GetType(direc_cosines)
             label = orientation.GetLabel(_type)
+            logger.debug(f"DICOM orientation: {label}")
             logger.debug(f"DICOM orientation: {label}")
 
             # ----------   Refactory --------------------------------------
@@ -300,7 +307,29 @@ class DicomFileLoader:
                 try:
                     parser = dicom.Parser()
                     parser.SetDataImage(dict_file[self.filepath], self.filepath, thumbnail_path)
+                try:
+                    parser = dicom.Parser()
+                    parser.SetDataImage(dict_file[self.filepath], self.filepath, thumbnail_path)
 
+                    dcm = dicom.Dicom()
+                    # self.l.acquire()
+                    dcm.SetParser(parser)
+                    grouper.AddFile(dcm)
+                    logger.info(f"Successfully added DICOM file to grouper: {self.filepath}")
+                    # Try to log current count of files in grouper
+                    try:
+                        file_count = len(grouper.GetPatientsGroups())
+                        logger.info(f"Current patient groups in grouper: {file_count}")
+                    except Exception as e:
+                        logger.debug(f"Could not get patient group count: {str(e)}")
+                    # self.l.release()
+                except Exception as e:
+                    logger.error(f"Error processing DICOM file {self.filepath}: {str(e)}")
+            else:
+                logger.info(f"Skipping DICOMDIR file: {self.filepath}")
+        else:
+            logger.warning(f"Failed to read DICOM file: {self.filepath}")
+            # Don't raise an exception here, just continue with the next file
                     dcm = dicom.Dicom()
                     # self.l.acquire()
                     dcm.SetParser(parser)
@@ -358,6 +387,7 @@ def yGetDicomGroups(directory, recursive=True, gui=True):
     logger.info(f"Found {nfiles} total files in directory, starting DICOM processing")
 
     counter = 0
+    valid_dicom_counter = 0
     valid_dicom_counter = 0
     grouper = dicom_grouper.DicomPatientGrouper()
 
@@ -427,10 +457,17 @@ def yGetDicomGroups(directory, recursive=True, gui=True):
 )
 def GetDicomGroups(directory, recursive=True):
     return list(yGetDicomGroups(directory, recursive, gui=False))
+    return list(yGetDicomGroups(directory, recursive, gui=False))
 
 
-class ProgressDicomReader:
+class ProgressDicomReader():
     def __init__(self):
+        self.running = True
+        self.dicom_series = None
+        self.directory = None
+        self.recursive = True
+        self.result = None
+        self.stoped = False
         self.running = True
         self.dicom_series = None
         self.directory = None
@@ -452,6 +489,8 @@ class ProgressDicomReader:
     def SetDirectoryPath(self, path, recursive=True):
         self.directory = path
         self.recursive = recursive
+        self.directory = path
+        self.recursive = recursive
         self.running = True
         self.stoped = False
         logger.info(f"Set DICOM directory path: {path}, recursive: {recursive}")
@@ -464,6 +503,16 @@ class ProgressDicomReader:
         self.GetDicomGroups(path, recursive)
 
     def UpdateLoadFileProgress(self, cont_progress):
+        # The Progress function in control.py expects a two-element list with [counter, total]
+        # if we receive a tuple of two values (counter, nfiles), convert it to a list
+        if isinstance(cont_progress, tuple) and len(cont_progress) == 2:
+            Publisher.sendMessage("Update dicom load", data=list(cont_progress))
+        # if we get a single value, assume it's a percentage
+        elif isinstance(cont_progress, (int, float)):
+            Publisher.sendMessage("Update dicom load", data=[int(cont_progress), 100])
+        # otherwise, pass it through (assuming it's already the expected list format)
+        else:
+            Publisher.sendMessage("Update dicom load", data=cont_progress)
         # The Progress function in control.py expects a two-element list with [counter, total]
         # if we receive a tuple of two values (counter, nfiles), convert it to a list
         if isinstance(cont_progress, tuple) and len(cont_progress) == 2:

@@ -100,6 +100,7 @@ class DicomGroup:
         self.zspacing = 1
         self.dicom = None
         logger.debug(f"DicomGroup initialized with index {self.index}")
+        logger.debug(f"DicomGroup initialized with index {self.index}")
 
     @handle_errors(
         error_message="Error adding slice to DICOM group",
@@ -112,6 +113,7 @@ class DicomGroup:
 
         pos = tuple(dicom.image.position)
         logger.debug(f"Adding slice with position {pos} to group {self.index}")
+        logger.debug(f"Adding slice with position {pos} to group {self.index}")
 
         # Case to test: \other\higroma
         # condition created, if any dicom with the same
@@ -121,6 +123,7 @@ class DicomGroup:
             if pos not in self.slices_dict.keys():
                 self.slices_dict[pos] = dicom
                 self.nslices += dicom.image.number_of_frames
+                logger.debug(f"Added slice to group {self.index}, now has {self.nslices} slices")
                 logger.debug(f"Added slice to group {self.index}, now has {self.nslices} slices")
                 return True
             else:
@@ -146,6 +149,7 @@ class DicomGroup:
         # This list will be used to create the vtkImageData
         # (interpolated)
         logger.debug(f"Getting slice list from group {self.index} with {self.nslices} slices")
+        logger.debug(f"Getting slice list from group {self.index} with {self.nslices} slices")
         return self.slices_dict.values()
 
     @handle_errors(
@@ -157,6 +161,7 @@ class DicomGroup:
         # Should be called when user selects this group
         # This list will be used to create the vtkImageData
         # (interpolated)
+        logger.debug(f"Getting filename list from group {self.index} with {self.nslices} slices")
         logger.debug(f"Getting filename list from group {self.index} with {self.nslices} slices")
 
         if _has_win32api:
@@ -174,6 +179,7 @@ class DicomGroup:
         sorter.SetZSpacingTolerance(1e-10)
         try:
             logger.debug(f"Sorting {len(filelist)} files using GDCM IPPSorter")
+            logger.debug(f"Sorting {len(filelist)} files using GDCM IPPSorter")
             sorter.Sort([utils.encode(i, const.FS_ENCODE) for i in filelist])
         except TypeError:
             sorter.Sort(filelist)
@@ -181,6 +187,7 @@ class DicomGroup:
 
         # for breast-CT of koning manufacturing (KBCT)
         if list(self.slices_dict.values())[0].parser.GetManufacturerName() == "Koning":
+            logger.debug("Special sorting for Koning manufacturer")
             logger.debug("Special sorting for Koning manufacturer")
             filelist.sort()
 
@@ -198,6 +205,7 @@ class DicomGroup:
         # dicom = list_[0]
         # axis = ORIENT_MAP[dicom.image.orientation_label]
         # list_ = sorted(list_, key = lambda dicom:dicom.image.position[axis])
+        logger.debug(f"Getting hand-sorted list from group {self.index} with {len(list_)} slices")
         logger.debug(f"Getting hand-sorted list from group {self.index} with {len(list_)} slices")
         list_ = sorted(list_, key=lambda dicom: dicom.image.number)
         return list_
@@ -220,8 +228,10 @@ class DicomGroup:
 
             self.zspacing = abs(p1 - p2)
             logger.debug(f"Updated Z spacing for group {self.index}: {self.zspacing}")
+            logger.debug(f"Updated Z spacing for group {self.index}: {self.zspacing}")
         else:
             self.zspacing = 1
+            logger.debug(f"Only one slice in group {self.index}, setting Z spacing to 1")
             logger.debug(f"Only one slice in group {self.index}, setting Z spacing to 1")
 
     @handle_errors(
@@ -232,6 +242,7 @@ class DicomGroup:
     def GetDicomSample(self):
         size = len(self.slices_dict)
         dicom = self.GetHandSortedList()[size // 2]
+        logger.debug(f"Getting DICOM sample from group {self.index}, sample index: {size // 2}")
         logger.debug(f"Getting DICOM sample from group {self.index}, sample index: {size // 2}")
         return dicom
 
@@ -245,6 +256,7 @@ class PatientGroup:
         self.nslices = 0
         self.ngroups = 0
         self.dicom = None
+        logger.debug("PatientGroup initialized")
         logger.debug("PatientGroup initialized")
 
     @handle_errors(
@@ -284,6 +296,7 @@ class PatientGroup:
             self.ngroups += 1
             self.groups_dict[group_key] = group
             logger.debug(f"Created new group with key {group_key}, total groups: {self.ngroups}")
+            logger.debug(f"Created new group with key {group_key}, total groups: {self.ngroups}")
         # Group exists... Lets try to add slice
         else:
             group = self.groups_dict[group_key]
@@ -315,11 +328,13 @@ class PatientGroup:
         # Check if Problem 1 occurs (n groups with 1 slice each)
         is_there_problem_1 = False
         logger.debug(f"Number of slices: {self.nslices}, number of groups: {len(self.groups_dict)}")
+        logger.debug(f"Number of slices: {self.nslices}, number of groups: {len(self.groups_dict)}")
         if (self.nslices == len(self.groups_dict)) and (self.nslices > 1):
             is_there_problem_1 = True
 
         # Fix Problem 1
         if is_there_problem_1:
+            logger.warning("Problem 1 detected, fixing...")
             logger.warning("Problem 1 detected, fixing...")
             self.groups_dict = self.FixProblem1(self.groups_dict)
 
@@ -341,6 +356,9 @@ class PatientGroup:
         severity=ErrorSeverity.ERROR,
     )
     def GetDicomSample(self):
+        sample = list(self.groups_dict.values())[0].GetDicomSample()
+        logger.debug("Getting DICOM sample from patient group")
+        return sample
         sample = list(self.groups_dict.values())[0].GetDicomSample()
         logger.debug("Getting DICOM sample from patient group")
         return sample
@@ -537,11 +555,21 @@ class DicomPatientGrouper:
         self.dicom_groups = DicomGroups()
         logger.warning("DicomPatientGrouper is deprecated, use DicomGroups instead")
 
+    @handle_errors(
+        error_message="Error adding file to DICOM groups",
+        category=ErrorCategory.DICOM, 
+        severity=ErrorSeverity.ERROR
+    )
     def AddFile(self, dicom):
         return self.dicom_groups.AddFile(dicom)
 
     def Update(self):
         return self.dicom_groups.Update()
 
+    @handle_errors(
+        error_message="Error getting patients groups",
+        category=ErrorCategory.DICOM, 
+        severity=ErrorSeverity.ERROR
+    )
     def GetPatientsGroups(self):
         return self.dicom_groups.GetPatientsGroups()

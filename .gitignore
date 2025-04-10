@@ -273,9 +273,3 @@ tags
 
 # MacOS temporary file
 .DS_Store
-
-# Plugin related directories and files - exclude from tracking
-plugins/
-inv3_plugins*/
-*plugin
-k_morphology_plugin

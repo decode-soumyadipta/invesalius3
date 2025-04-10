@@ -839,35 +839,42 @@ class Frame(wx.Frame):
 
             session = ses.Session()
 
-            rendering = values[const.RENDERING]
-            surface_interpolation = values[const.SURFACE_INTERPOLATION]
-            language = values[const.LANGUAGE]
-            slice_interpolation = values[const.SLICE_INTERPOLATION]
-            file_logging = values[const.FILE_LOGGING]
-            file_logging_level = values[const.FILE_LOGGING_LEVEL]
-            append_log_file = values[const.APPEND_LOG_FILE]
-            logging_file = values[const.LOGFILE]
-            console_logging = values[const.CONSOLE_LOGGING]
-            console_logging_level = values[const.CONSOLE_LOGGING_LEVEL]
-            logging = values[const.LOGGING]
-            logging_level = values[const.LOGGING_LEVEL]
-            append_log_file = values[const.APPEND_LOG_FILE]
-            logging_file = values[const.LOGFILE]
-
-            session.SetConfig("rendering", rendering)
-            session.SetConfig("surface_interpolation", surface_interpolation)
-            session.SetConfig("language", language)
-            session.SetConfig("slice_interpolation", slice_interpolation)
-            session.SetConfig("file_logging", file_logging)
-            session.SetConfig("file_logging_level", file_logging_level)
-            session.SetConfig("append_log_file", append_log_file)
-            session.SetConfig("logging_file", logging_file)
-            session.SetConfig("console_logging", console_logging)
-            session.SetConfig("console_logging_level", console_logging_level)
-            session.SetConfig("do_logging", logging)
-            session.SetConfig("logging_level", logging_level)
-            session.SetConfig("append_log_file", append_log_file)
-            session.SetConfig("logging_file", logging_file)
+            rendering = values.get(const.RENDERING)
+            surface_interpolation = values.get(const.SURFACE_INTERPOLATION)
+            language = values.get(const.LANGUAGE)
+            slice_interpolation = values.get(const.SLICE_INTERPOLATION)
+            
+            # Use LOGGING instead of FILE_LOGGING if it exists, otherwise try FILE_LOGGING
+            file_logging = values.get(const.LOGGING, values.get(const.FILE_LOGGING))
+            file_logging_level = values.get(const.LOGGING_LEVEL, values.get(const.FILE_LOGGING_LEVEL))
+            append_log_file = values.get(const.APPEND_LOG_FILE)
+            logging_file = values.get(const.LOGFILE)
+            console_logging = values.get(const.CONSOLE_LOGGING)
+            console_logging_level = values.get(const.CONSOLE_LOGGING_LEVEL)
+            
+            # Set session configuration only if values are not None
+            if rendering is not None:
+                session.SetConfig("rendering", rendering)
+            if surface_interpolation is not None:
+                session.SetConfig("surface_interpolation", surface_interpolation)
+            if language is not None:
+                session.SetConfig("language", language)
+            if slice_interpolation is not None:
+                session.SetConfig("slice_interpolation", slice_interpolation)
+            if file_logging is not None:
+                session.SetConfig("file_logging", file_logging)
+                session.SetConfig("do_logging", file_logging)  # For backward compatibility
+            if file_logging_level is not None:
+                session.SetConfig("file_logging_level", file_logging_level)
+                session.SetConfig("logging_level", file_logging_level)  # For backward compatibility
+            if append_log_file is not None:
+                session.SetConfig("append_log_file", append_log_file)
+            if logging_file is not None:
+                session.SetConfig("logging_file", logging_file)
+            if console_logging is not None:
+                session.SetConfig("console_logging", console_logging)
+            if console_logging_level is not None:
+                session.SetConfig("console_logging_level", console_logging_level)
 
             Publisher.sendMessage("Remove Volume")
             Publisher.sendMessage("Reset Raycasting")

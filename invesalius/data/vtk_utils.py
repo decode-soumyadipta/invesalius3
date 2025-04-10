@@ -21,9 +21,9 @@ import sys
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence, SupportsInt, Tuple, Union
 
 import wx
-<<<<<<< HEAD
+
 from vtkmodules.vtkCommonCore import VTK_FLOAT, VTK_DOUBLE, VTK_INT, VTK_UNSIGNED_INT, VTK_UNSIGNED_CHAR, VTK_CHAR, VTK_SHORT, VTK_UNSIGNED_SHORT
-=======
+
 from vtkmodules.vtkCommonCore import (
     VTK_CHAR,
     VTK_DOUBLE,
@@ -34,7 +34,7 @@ from vtkmodules.vtkCommonCore import (
     VTK_UNSIGNED_INT,
     VTK_UNSIGNED_SHORT,
 )
->>>>>>> e6e3c729 (pre commit test fixes)
+
 from vtkmodules.vtkCommonMath import vtkMatrix4x4
 from vtkmodules.vtkIOGeometry import vtkOBJReader, vtkSTLReader
 from vtkmodules.vtkIOPLY import vtkPLYReader

@@ -61,7 +61,7 @@ VIEW_TOOLS = [ID_LAYOUT, ID_TEXT, ID_RULER] = [wx.NewIdRef() for number in range
 [ID_SHOW_LOG_VIEWER] = [wx.NewIdRef() for number in range(1)]
 
 WILDCARD_EXPORT_SLICE = (
-    "HDF5 (*.hdf5)|*.hdf5|NIfTI 1 (*.nii)|*.nii|Compressed NIfTI (*.nii.gz)|*.nii.gz"
+    "HDF5 (*.hdf5)|*.hdf5|" "NIfTI 1 (*.nii)|*.nii|" "Compressed NIfTI (*.nii.gz)|*.nii.gz"
 )
 
 IDX_EXT = {0: ".hdf5", 1: ".nii", 2: ".nii.gz"}
@@ -544,16 +544,16 @@ class Frame(wx.Frame):
 
     def ExitDialog(self):
         msg = _("Are you sure you want to exit?")
-        if sys.platform == "darwin":
-            dialog = wx.RichMessageDialog(
-                None, "", msg, wx.ICON_QUESTION | wx.YES_NO | wx.NO_DEFAULT
-            )
-            dialog.ShowCheckBox("Store session", True)
-        else:
-            dialog = wx.RichMessageDialog(
-                None, msg, "Invesalius 3", wx.ICON_QUESTION | wx.YES_NO | wx.NO_DEFAULT
-            )
-            dialog.ShowCheckBox("Store session", True)
+        dialog = wx.RichMessageDialog(
+            None, msg, "Invesalius 3", wx.ICON_QUESTION | wx.YES_NO | wx.NO_DEFAULT
+        )
+        dialog.ShowCheckBox("Store session", False)
+
+        def on_close(event):
+            dialog.EndModal(wx.ID_NO)
+            event.Skip()
+
+        dialog.Bind(wx.EVT_CLOSE, on_close)
 
         answer = dialog.ShowModal()
         save = dialog.IsCheckBoxChecked()

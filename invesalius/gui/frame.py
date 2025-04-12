@@ -590,6 +590,9 @@ class Frame(wx.Frame):
                 traceback.print_exc()
                 print(f"Error cleaning up log viewer: {e}")
 
+            # Only delete the session if user chose not to store it (status=1)
+            # If status=2, the user chose to store the session, so we don't delete the state file
+            # This ensures the session can be resumed on next startup
             if status == 1:
                 Publisher.sendMessage("Exit session")
             self.Destroy()

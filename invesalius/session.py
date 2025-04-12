@@ -302,5 +302,10 @@ class Session(metaclass=Singleton):
         return success
 
     def _Exit(self) -> None:
+        """
+        Called when exiting the application.
+        Only deletes state if the user has chosen to not save the session.
+        """
         self.CloseProject()
-        self.DeleteStateFile()
+        # State file is deleted through frame.py when the user explicitly chooses not to save the session
+        # We don't delete the state file here to maintain stored session

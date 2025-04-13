@@ -769,7 +769,7 @@ def LoadDicom(directory, slice_interval=0, mode="append"):
     Load DICOM as vtkImageData and return it.
     """
     try:
-        logger.info(f"Loading DICOM from directory: {directory}")
+        logger.info(f"Loading DICOM from {directory}")
 
         # Get dicom files
         dicom_files = GetDicomFiles(directory)
@@ -778,11 +778,9 @@ def LoadDicom(directory, slice_interval=0, mode="append"):
             return False
 
         # Create a new grouper for processing these files
-        logger.debug("Creating DICOM patient grouper")
         grouper = dicom_grouper.DicomPatientGrouper()
 
         # Process each DICOM file
-        logger.debug(f"Processing {len(dicom_files)} DICOM files")
         for filepath in dicom_files:
             try:
                 DicomFileLoader(grouper, filepath)
@@ -790,61 +788,25 @@ def LoadDicom(directory, slice_interval=0, mode="append"):
                 logger.error(f"Error loading DICOM file {filepath}: {str(e)}")
 
         # Get the patient groups
-        logger.debug("Getting patient groups")
         patient_groups = grouper.GetPatientsGroups()
         if not patient_groups:
             logger.error("No valid DICOM groups found")
             return False
 
         # Select the largest group
-        logger.debug("Selecting largest DICOM group")
         largest_group = SelectLargerDicomGroup(patient_groups)
         if not largest_group:
             logger.error("Could not select a valid DICOM group")
             return False
 
-        logger.debug("Obtaining file list from selected group")
-        filelist = largest_group.GetDicomSeries().GetFilenameList()
-        logger.debug(f"Found {len(filelist)} files in selected group")
-
         if HAS_VTK_GDCM:
             # Load using vtkGDCMImageReader if available
-            logger.debug("Using vtkGDCMImageReader for loading")
-            
-            # The application is running under Windows:
-            if _has_win32api:
-                logger.debug("Using win32api for file path conversion")
-                try:
-                    reader = vtkGDCMImageReader()
-                    for file in filelist:
-                        path = win32api.GetShortPathName(file)
-                        try:
-                            reader.AddFileName(utils.encode(path, const.FS_ENCODE))
-                        except TypeError:
-                            reader.AddFileName(path)
-                except (ImportError, TypeError):
-                    reader = vtkGDCMImageReader()
-                    for file in filelist:
-                        try:
-                            reader.AddFileName(utils.encode(file, const.FS_ENCODE))
-                        except TypeError:
-                            reader.AddFileName(file)
-            else:
-                logger.debug("Using standard file path handling")
-                reader = vtkGDCMImageReader()
-                for file in filelist:
-                    try:
-                        reader.AddFileName(utils.encode(file, const.FS_ENCODE))
-                    except TypeError:
-                        reader.AddFileName(file)
-
-            logger.debug(f"Added {len(filelist)} files to the reader")
+            reader = vtkGDCMImageReader()
+            reader.SetDirectoryName(directory)
             reader.Update()
-            logger.debug("Reader update completed")
 
             # Get image data
-            logger.debug("Creating ImageData from reader output")
-            image = vtk_utils.get_image_from_reader(reader, slice_interval)
+            image = reader.GetOutput()
             if not image:
                 logger.error("Failed to get image data from DICOM reader")
                 return False
@@ -858,22 +820,18 @@ def LoadDicom(directory, slice_interval=0, mode="append"):
                 from invesalius.data.imagedata_utils import numpy_to_vtkImageData
 
                 # Load the first DICOM file to get dimensions
-                logger.debug(f"Reading first DICOM file: {filelist[0]}")
-                first_dicom = pydicom.dcmread(filelist[0])
+                first_dicom = pydicom.dcmread(dicom_files[0])
 
                 # Get dimensions
                 rows = first_dicom.Rows
                 cols = first_dicom.Columns
-                slices = len(filelist)
-                logger.debug(f"DICOM dimensions: {rows}x{cols}x{slices}")
+                slices = len(dicom_files)
 
                 # Create a numpy array to hold the image data
-                logger.debug("Creating numpy array for image data")
                 image_array = np.zeros((slices, rows, cols), dtype=np.int16)
 
                 # Load each DICOM file
-                logger.debug("Loading pixel data from each file")
-                for i, file_path in enumerate(filelist):
+                for i, file_path in enumerate(dicom_files):
                     try:
                         ds = pydicom.dcmread(file_path)
                         image_array[i, :, :] = ds.pixel_array
@@ -881,7 +839,6 @@ def LoadDicom(directory, slice_interval=0, mode="append"):
                         logger.error(f"Error reading DICOM file {file_path}: {str(e)}")
 
                 # Create vtkImageData
-                logger.debug("Converting numpy array to VTK ImageData")
                 image = numpy_to_vtkImageData(image_array)
                 if not image:
                     logger.error("Failed to convert numpy array to vtkImageData")
@@ -890,18 +847,8 @@ def LoadDicom(directory, slice_interval=0, mode="append"):
                 logger.error("Required modules for fallback DICOM reading are not available")
                 return False
 
-        # Retrieving the acquisition date/time for the group of slices
-        # Using first slice DICOM file
-        logger.debug("Retrieving acquisition date/time")
-        acquisition_date = GetAcquisitionDate(largest_group.GetDicomSample())
-        acquisition_time = GetAcquisitionTime(largest_group.GetDicomSample())
-        if acquisition_date and acquisition_time:
-            logger.info(f"DICOM acquisition date: {acquisition_date}, time: {acquisition_time}")
-        else:
-            logger.warning("Failed to retrieve acquisition date and/or time")
-
-        logger.info(f"DICOM loading completed from {directory} with {len(filelist)} files")
-        return image, acquisition_date, acquisition_time
+        logger.info("DICOM loaded successfully")
+        return image
 
     except Exception as e:
         logger.error(f"Error loading DICOM group: {str(e)}")

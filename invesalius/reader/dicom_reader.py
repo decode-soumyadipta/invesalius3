@@ -21,16 +21,10 @@ import sys
 import time
 
 import gdcm
+import numpy as np
 import wx
-
-# Not showing GDCM warning and debug messages
-try:
-    gdcm.Trace_DebugOff()
-    gdcm.Trace_WarningOff()
-except AttributeError:
-    pass
-
 from vtkmodules.vtkCommonCore import vtkFileOutputWindow, vtkOutputWindow
+from vtkmodules.vtkIOImage import vtkGDCMImageReader
 
 import invesalius.constants as const
 import invesalius.data.imagedata_utils as iu
@@ -39,6 +33,7 @@ import invesalius.reader.dicom_grouper as dicom_grouper
 import invesalius.utils as utils
 from invesalius import inv_paths
 from invesalius.data import imagedata_utils
+from invesalius.data.vtk_utils import get_image_from_reader
 from invesalius.enhanced_logging import get_logger
 from invesalius.error_handling import (
     DicomError,
@@ -50,6 +45,13 @@ from invesalius.pubsub import pub as Publisher
 
 # Initialize logger
 logger = get_logger("reader.dicom_reader")
+
+# Not showing GDCM warning and debug messages
+try:
+    gdcm.Trace_DebugOff()
+    gdcm.Trace_WarningOff()
+except AttributeError:
+    pass
 
 # Try to import vtkGDCMImageReader, but provide a fallback if it fails
 try:
@@ -916,3 +918,21 @@ def _is_valid_dicom(filename):
         # If any exception occurs, the file is not a valid DICOM file
         logger.debug(f"Exception checking if valid DICOM file: {filename}, error: {str(e)}")
         return False
+
+
+def LoadSlice(instance):
+    """
+    Extract image data from a DICOM instance.
+    
+    Args:
+        instance: A VTK reader instance
+        
+    Returns:
+        vtkImageData object or None if extraction failed
+    """
+    # Get image data
+    logger.debug("Creating ImageData from reader output")
+    image = get_image_from_reader(instance, 0)
+    if not image:
+        logger.error("Failed to get image data from DICOM reader")
+    return image

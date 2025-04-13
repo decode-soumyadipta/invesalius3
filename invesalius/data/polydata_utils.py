@@ -18,7 +18,7 @@
 # --------------------------------------------------------------------------
 
 import sys
-from typing import Iterable, List
+from collections.abc import Iterable
 
 import numpy as np
 from vtkmodules.util import numpy_support
@@ -98,14 +98,15 @@ def ApplySmoothFilter(
     smoother.SetRelaxationFactor(relaxation_factor)
     smoother.FeatureEdgeSmoothingOff()
     smoother.BoundarySmoothingOff()
+    smoother.AddObserver(
+        "ProgressEvent", lambda obj, evt: UpdateProgress(smoother, "Smoothing surface...")
+    )
     smoother.Update()
+
     filler = vtkFillHolesFilter()
     filler.SetInputConnection(smoother.GetOutputPort())
     filler.SetHoleSize(1000)
     filler.Update()
-    smoother.AddObserver(
-        "ProgressEvent", lambda obj, evt: UpdateProgress(smoother, "Smoothing surface...")
-    )
 
     return filler.GetOutput()
 
@@ -206,7 +207,7 @@ def LoadPolydata(path: str) -> vtkPolyData:
     return polydata
 
 
-def JoinSeedsParts(polydata: vtkPolyData, point_id_list: List[int]) -> vtkPolyData:
+def JoinSeedsParts(polydata: vtkPolyData, point_id_list: list[int]) -> vtkPolyData:
     """
     The function require vtkPolyData and point id
     from vtkPolyData.
@@ -247,7 +248,7 @@ def SelectLargestPart(polydata: vtkPolyData) -> vtkPolyData:
     return result
 
 
-def SplitDisconectedParts(polydata: vtkPolyData) -> List[vtkPolyData]:
+def SplitDisconectedParts(polydata: vtkPolyData) -> list[vtkPolyData]:
     """ """
     conn = vtkPolyDataConnectivityFilter()
     conn.SetInputData(polydata)
@@ -259,7 +260,7 @@ def SplitDisconectedParts(polydata: vtkPolyData) -> List[vtkPolyData]:
     conn.SetExtractionModeToSpecifiedRegions()
     conn.Update()
 
-    polydata_collection: List[vtkPolyData] = []
+    polydata_collection: list[vtkPolyData] = []
 
     # Update progress value in GUI
     progress = nregions - 1
@@ -310,7 +311,6 @@ def RemoveNonVisibleFaces(
     fp = np.array(camera.GetFocalPoint())
     v = pos - fp
     mag = np.linalg.norm(v)
-    vn = v / mag
 
     id_filter = vtkIdFilter()
     id_filter.SetInputData(polydata)

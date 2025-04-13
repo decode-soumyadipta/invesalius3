@@ -69,7 +69,6 @@ import invesalius.constants as const
 import invesalius.utils as utils
 from invesalius.enhanced_logging import get_logger
 from invesalius.error_handling import (
-    DicomError,
     ErrorCategory,
     ErrorSeverity,
     handle_errors,
@@ -363,7 +362,7 @@ class PatientGroup:
         dict2 = {}
         for key in dict.keys():
             spname, idstudy, serie_number, patient_orientation, index = key
-            if not (spname, idstudy, patient_orientation) in dict2:
+            if (spname, idstudy, patient_orientation) not in dict2:
                 dict2[(spname, idstudy, patient_orientation)] = []
             dict2[(spname, idstudy, patient_orientation)].append(dict[key])
 
@@ -536,12 +535,34 @@ class DicomPatientGrouper:
     def __init__(self):
         self.dicom_groups = DicomGroups()
         logger.warning("DicomPatientGrouper is deprecated, use DicomGroups instead")
+        logger.debug("DicomPatientGrouper initialized")
 
+    @handle_errors(
+        error_message="Error adding file to DICOM patient grouper",
+        category=ErrorCategory.DICOM,
+        severity=ErrorSeverity.ERROR,
+        reraise=False,
+    )
     def AddFile(self, dicom):
+        logger.debug(f"Adding file to DICOM patient grouper: {dicom.image.file}")
         return self.dicom_groups.AddFile(dicom)
 
+    @handle_errors(
+        error_message="Error updating DICOM patient grouper",
+        category=ErrorCategory.DICOM,
+        severity=ErrorSeverity.ERROR,
+        reraise=False,
+    )
     def Update(self):
+        logger.debug("Updating DICOM patient grouper")
         return self.dicom_groups.Update()
 
+    @handle_errors(
+        error_message="Error getting patients groups from DICOM patient grouper",
+        category=ErrorCategory.DICOM,
+        severity=ErrorSeverity.ERROR,
+        reraise=False,
+    )
     def GetPatientsGroups(self):
+        logger.debug("Getting patients groups from DICOM patient grouper")
         return self.dicom_groups.GetPatientsGroups()

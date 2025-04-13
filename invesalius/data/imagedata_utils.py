@@ -41,16 +41,32 @@ import invesalius.data.slice_ as sl
 import invesalius.gui.dialogs as dlg
 import invesalius.reader.bitmap_reader as bitmap_reader
 from invesalius.data import vtk_utils as vtk_utils
+from invesalius.enhanced_logging import get_logger
+from invesalius.error_handling import (
+    ErrorCategory,
+    ErrorSeverity,
+    handle_errors,
+)
 from invesalius.i18n import tr as _
+
+# Initialize logger
+logger = get_logger("data.imagedata_utils")
 
 # TODO: Test cases which are originally in sagittal/coronal orientation
 # and have gantry
 
 
+@handle_errors(
+    error_message="Error resampling 3D image",
+    category=ErrorCategory.IMAGE_PROCESSING,
+    severity=ErrorSeverity.ERROR,
+    reraise=False,
+)
 def ResampleImage3D(imagedata, value):
     """
     Resample vtkImageData matrix.
     """
+    logger.debug(f"Resampling 3D image with value: {value}")
     spacing = imagedata.GetSpacing()
     extent = imagedata.GetExtent()
     size = imagedata.GetDimensions()
@@ -65,13 +81,23 @@ def ResampleImage3D(imagedata, value):
     resample.SetAxisMagnificationFactor(0, resolution)
     resample.SetAxisMagnificationFactor(1, resolution)
 
+    logger.debug("3D image resampling completed")
     return resample.GetOutput()
 
 
+@handle_errors(
+    error_message="Error resampling 2D image",
+    category=ErrorCategory.IMAGE_PROCESSING,
+    severity=ErrorSeverity.ERROR,
+    reraise=False,
+)
 def ResampleImage2D(imagedata, px=None, py=None, resolution_percentage=None, update_progress=None):
     """
     Resample vtkImageData matrix.
     """
+    logger.debug(
+        f"Resampling 2D image with px={px}, py={py}, resolution_percentage={resolution_percentage}"
+    )
 
     extent = imagedata.GetExtent()
     # spacing = imagedata.GetSpacing()
@@ -103,6 +129,7 @@ def ResampleImage2D(imagedata, px=None, py=None, resolution_percentage=None, upd
         resample.AddObserver("ProgressEvent", lambda obj, evt: update_progress(resample, message))
     resample.Update()
 
+    logger.debug("2D image resampling completed")
     return resample.GetOutput()
 
 
@@ -129,22 +156,37 @@ def resize_image_array(image, resolution_percentage, as_mmap=False):
     return out
 
 
+@handle_errors(
+    error_message="Error reading DCM slice as numpy array",
+    category=ErrorCategory.DICOM,
+    severity=ErrorSeverity.ERROR,
+    reraise=False,
+)
 def read_dcm_slice_as_np2(filename, resolution_percentage=1.0):
+    logger.debug(f"Reading DCM slice as numpy array: {filename}")
     reader = gdcm.ImageReader()
     reader.SetFileName(filename)
     reader.Read()
     image = reader.GetImage()
     output = converters.gdcm_to_numpy(image)
     if resolution_percentage < 1.0:
+        logger.debug(f"Resizing slice with resolution percentage: {resolution_percentage}")
         output = zoom(output, resolution_percentage)
     return output
 
 
+@handle_errors(
+    error_message="Error fixing gantry tilt",
+    category=ErrorCategory.IMAGE_PROCESSING,
+    severity=ErrorSeverity.ERROR,
+    reraise=False,
+)
 def FixGantryTilt(matrix, spacing, tilt):
     """
     Fix gantry tilt given a vtkImageData and the tilt value. Return new
     vtkImageData.
     """
+    logger.debug(f"Fixing gantry tilt with value: {tilt}")
     angle = np.radians(tilt)
     spacing = spacing[0], spacing[1], spacing[2]
     gntan = math.tan(angle)
@@ -152,6 +194,8 @@ def FixGantryTilt(matrix, spacing, tilt):
     for n, slice_ in enumerate(matrix):
         offset = gntan * n * spacing[2]
         matrix[n] = shift(slice_, (-offset / spacing[1], 0), cval=matrix.min())
+
+    logger.debug("Gantry tilt correction completed")
 
 
 def BuildEditedImage(imagedata, points):

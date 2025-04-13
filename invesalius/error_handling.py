@@ -39,9 +39,8 @@ import sys
 import traceback
 from datetime import datetime
 from enum import Enum, auto
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
+from typing import Any
 
-import psutil
 import wx
 
 import invesalius.constants as const
@@ -72,6 +71,9 @@ class ErrorCategory(Enum):
     PERFORMANCE = auto()
     HARDWARE = auto()
     EXTERNAL_LIBRARY = auto()
+    IMAGE_PROCESSING = auto()
+    VTK = auto()
+    GUI = auto()
 
 
 # Define error severity levels
@@ -94,8 +96,8 @@ class InVesaliusException(Exception):
         message: str,
         category: ErrorCategory = ErrorCategory.GENERAL,
         severity: ErrorSeverity = ErrorSeverity.ERROR,
-        details: Optional[Dict[str, Any]] = None,
-        original_exception: Optional[Exception] = None,
+        details: dict[str, Any] | None = None,
+        original_exception: Exception | None = None,
     ):
         self.message = message
         self.category = category
@@ -121,8 +123,8 @@ class IOError(InVesaliusException):
     def __init__(
         self,
         message: str,
-        details: Optional[Dict[str, Any]] = None,
-        original_exception: Optional[Exception] = None,
+        details: dict[str, Any] | None = None,
+        original_exception: Exception | None = None,
     ):
         super().__init__(
             message,
@@ -139,8 +141,8 @@ class DicomError(InVesaliusException):
     def __init__(
         self,
         message: str,
-        details: Optional[Dict[str, Any]] = None,
-        original_exception: Optional[Exception] = None,
+        details: dict[str, Any] | None = None,
+        original_exception: Exception | None = None,
     ):
         super().__init__(
             message,
@@ -157,8 +159,8 @@ class SegmentationError(InVesaliusException):
     def __init__(
         self,
         message: str,
-        details: Optional[Dict[str, Any]] = None,
-        original_exception: Optional[Exception] = None,
+        details: dict[str, Any] | None = None,
+        original_exception: Exception | None = None,
     ):
         super().__init__(
             message,
@@ -175,8 +177,8 @@ class SurfaceError(InVesaliusException):
     def __init__(
         self,
         message: str,
-        details: Optional[Dict[str, Any]] = None,
-        original_exception: Optional[Exception] = None,
+        details: dict[str, Any] | None = None,
+        original_exception: Exception | None = None,
     ):
         super().__init__(
             message,
@@ -193,12 +195,48 @@ class RenderingError(InVesaliusException):
     def __init__(
         self,
         message: str,
-        details: Optional[Dict[str, Any]] = None,
-        original_exception: Optional[Exception] = None,
+        details: dict[str, Any] | None = None,
+        original_exception: Exception | None = None,
     ):
         super().__init__(
             message,
             category=ErrorCategory.RENDERING,
+            severity=ErrorSeverity.ERROR,
+            details=details,
+            original_exception=original_exception,
+        )
+
+
+class ImageDataError(InVesaliusException):
+    """Exception raised for image data processing errors."""
+
+    def __init__(
+        self,
+        message: str,
+        details: dict[str, Any] | None = None,
+        original_exception: Exception | None = None,
+    ):
+        super().__init__(
+            message,
+            category=ErrorCategory.IMAGE_PROCESSING,
+            severity=ErrorSeverity.ERROR,
+            details=details,
+            original_exception=original_exception,
+        )
+
+
+class VTKError(InVesaliusException):
+    """Exception raised for VTK-related errors."""
+
+    def __init__(
+        self,
+        message: str,
+        details: dict[str, Any] | None = None,
+        original_exception: Exception | None = None,
+    ):
+        super().__init__(
+            message,
+            category=ErrorCategory.EXTERNAL_LIBRARY,
             severity=ErrorSeverity.ERROR,
             details=details,
             original_exception=original_exception,
@@ -211,8 +249,8 @@ class NavigationError(InVesaliusException):
     def __init__(
         self,
         message: str,
-        details: Optional[Dict[str, Any]] = None,
-        original_exception: Optional[Exception] = None,
+        details: dict[str, Any] | None = None,
+        original_exception: Exception | None = None,
     ):
         super().__init__(
             message,
@@ -229,8 +267,8 @@ class PluginError(InVesaliusException):
     def __init__(
         self,
         message: str,
-        details: Optional[Dict[str, Any]] = None,
-        original_exception: Optional[Exception] = None,
+        details: dict[str, Any] | None = None,
+        original_exception: Exception | None = None,
     ):
         super().__init__(
             message,
@@ -247,8 +285,8 @@ class MemoryError(InVesaliusException):
     def __init__(
         self,
         message: str,
-        details: Optional[Dict[str, Any]] = None,
-        original_exception: Optional[Exception] = None,
+        details: dict[str, Any] | None = None,
+        original_exception: Exception | None = None,
     ):
         super().__init__(
             message,
@@ -265,7 +303,7 @@ def handle_errors(
     show_dialog: bool = True,
     log_error: bool = True,
     reraise: bool = False,
-    expected_exceptions: Tuple[Type[Exception], ...] = (Exception,),
+    expected_exceptions: tuple[type[Exception], ...] = (Exception,),
     category: ErrorCategory = ErrorCategory.GENERAL,
     severity: ErrorSeverity = ErrorSeverity.ERROR,
 ):
@@ -363,7 +401,7 @@ def handle_errors(
     return decorator
 
 
-def show_error_dialog(message: str, exception: Optional[InVesaliusException] = None):
+def show_error_dialog(message: str, exception: InVesaliusException | None = None):
     """
     Show an error dialog to the user.
 
@@ -388,7 +426,7 @@ def show_error_dialog(message: str, exception: Optional[InVesaliusException] = N
     dlg.Destroy()
 
 
-def get_system_info() -> Dict[str, str]:
+def get_system_info() -> dict[str, str]:
     """
     Get system information for error reporting.
 
@@ -499,7 +537,7 @@ class ErrorDialog(wx.Dialog):
     Dialog for displaying detailed error information.
     """
 
-    def __init__(self, parent: Optional[wx.Window], message: str, exception: InVesaliusException):
+    def __init__(self, parent: wx.Window | None, message: str, exception: InVesaliusException):
         """
         Initialize the error dialog.
 

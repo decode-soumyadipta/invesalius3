@@ -109,6 +109,7 @@ class DicomGroup:
     def AddSlice(self, dicom):
         if not self.dicom:
             self.dicom = dicom
+            logger.debug(f"First slice added to group {self.index}, title: {self.title}")
 
         pos = tuple(dicom.image.position)
         logger.debug(f"Adding slice with position {pos} to group {self.index}")
@@ -160,11 +161,18 @@ class DicomGroup:
         logger.debug(f"Getting filename list from group {self.index} with {self.nslices} slices")
 
         if _has_win32api:
-            filelist = [
-                win32api.GetShortPathName(dicom.image.file) for dicom in self.slices_dict.values()
-            ]
+            try:
+                filelist = [
+                    win32api.GetShortPathName(dicom.image.file)
+                    for dicom in self.slices_dict.values()
+                ]
+                logger.debug("Using win32api GetShortPathName to get filenames")
+            except Exception as e:
+                logger.warning(f"Error using win32api: {str(e)}")
+                filelist = [dicom.image.file for dicom in self.slices_dict.values()]
         else:
             filelist = [dicom.image.file for dicom in self.slices_dict.values()]
+            logger.debug("Using standard filenames")
 
         # Sort slices using GDCM
         # if (self.dicom.image.orientation_label != "CORONAL"):
@@ -176,8 +184,23 @@ class DicomGroup:
             logger.debug(f"Sorting {len(filelist)} files using GDCM IPPSorter")
             sorter.Sort([utils.encode(i, const.FS_ENCODE) for i in filelist])
         except TypeError:
+            logger.debug("Using unencoded filenames for sorting")
             sorter.Sort(filelist)
+        except Exception as e:
+            logger.warning(f"Error during IPPSorter.Sort: {str(e)}")
+
         filelist = sorter.GetFilenames()
+        logger.debug(f"Sorted file list contains {len(filelist)} files")
+
+        # Check if z-spacing was computed by GDCM
+        try:
+            computed_spacing = sorter.GetZSpacing()
+            if computed_spacing > 0:
+                logger.debug(f"GDCM computed Z spacing: {computed_spacing}")
+            else:
+                logger.debug("GDCM could not compute Z spacing")
+        except:
+            logger.debug("Error retrieving computed Z spacing from GDCM")
 
         # for breast-CT of koning manufacturing (KBCT)
         if list(self.slices_dict.values())[0].parser.GetManufacturerName() == "Koning":
@@ -220,6 +243,7 @@ class DicomGroup:
 
             self.zspacing = abs(p1 - p2)
             logger.debug(f"Updated Z spacing for group {self.index}: {self.zspacing}")
+            logger.debug(f"Z spacing calculated from axis {axis}, positions {p1} and {p2}")
         else:
             self.zspacing = 1
             logger.debug(f"Only one slice in group {self.index}, setting Z spacing to 1")
@@ -231,8 +255,9 @@ class DicomGroup:
     )
     def GetDicomSample(self):
         size = len(self.slices_dict)
-        dicom = self.GetHandSortedList()[size // 2]
-        logger.debug(f"Getting DICOM sample from group {self.index}, sample index: {size // 2}")
+        sample_index = size // 2
+        dicom = self.GetHandSortedList()[sample_index]
+        logger.debug(f"Getting DICOM sample from group {self.index}, sample index: {sample_index}")
         return dicom
 
 
@@ -510,7 +535,8 @@ class DicomGroups:
         severity=ErrorSeverity.WARNING,
     )
     def Update(self):
-        for patient_group in self.patients.values():
+        for patient_key, patient_group in self.patients.items():
+            logger.debug(f"Updating patient group for {patient_key}")
             patient_group.Update()
         logger.debug("Updated all DICOM groups")
 
@@ -522,6 +548,19 @@ class DicomGroups:
     def GetPatientsGroups(self):
         patients_groups = list(self.patients.values())
         logger.info(f"Returning {len(patients_groups)} patient groups")
+
+        # Log more detailed information about each patient group
+        for i, patient_group in enumerate(patients_groups):
+            try:
+                patient_name = (
+                    patient_group.dicom.patient.name if patient_group.dicom else "Unknown"
+                )
+                logger.debug(
+                    f"Patient group {i+1}: {patient_name} with {patient_group.ngroups} series groups"
+                )
+            except:
+                logger.debug(f"Patient group {i+1}: Error retrieving info")
+
         return patients_groups
 
 
@@ -566,4 +605,6 @@ class DicomPatientGrouper:
     )
     def GetPatientsGroups(self):
         logger.debug("Getting patients groups from DICOM patient grouper")
-        return self.dicom_groups.GetPatientsGroups()
+        patient_groups = self.dicom_groups.GetPatientsGroups()
+        logger.info(f"DicomPatientGrouper returning {len(patient_groups)} patient groups")
+        return patient_groups

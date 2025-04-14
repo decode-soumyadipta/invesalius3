@@ -93,16 +93,53 @@ def SelectLargerDicomGroup(patient_groups):
         largest_group = None
         max_files = 0
 
+        logger.info(f"Selecting from {len(patient_groups)} patient groups")
+
+        patient_idx = 0
         for patient in patient_groups:
+            patient_idx += 1
+            study_idx = 0
+            try:
+                patient_name = patient.dicom.patient.name if patient.dicom else "Unknown"
+                logger.debug(f"Examining patient {patient_idx}: {patient_name}")
+            except:
+                logger.debug(f"Examining patient {patient_idx}: Could not retrieve name")
+
             for study in patient.GetStudies():
+                study_idx += 1
+                series_idx = 0
+
+                try:
+                    study_desc = study.dicom.acquisition.id_study if study.dicom else "Unknown"
+                    logger.debug(f"  Study {study_idx}: {study_desc}")
+                except:
+                    logger.debug(f"  Study {study_idx}: Could not retrieve description")
+
                 for series in study.GetSeries():
+                    series_idx += 1
                     series_files = len(series.GetDicomSeries().GetList())
+
+                    try:
+                        series_desc = series.title if hasattr(series, "title") else "Unknown"
+                        logger.debug(
+                            f"    Series {series_idx}: {series_desc} ({series_files} files)"
+                        )
+                    except:
+                        logger.debug(
+                            f"    Series {series_idx}: Could not retrieve description ({series_files} files)"
+                        )
+
                     if series_files > max_files:
                         max_files = series_files
                         largest_group = series
+                        logger.debug(f"      New largest group found: {series_files} files")
 
         if largest_group:
-            logger.info(f"Selected largest DICOM group with {max_files} files")
+            try:
+                group_desc = largest_group.title if hasattr(largest_group, "title") else "Unknown"
+                logger.info(f"Selected largest DICOM group: {group_desc} with {max_files} files")
+            except:
+                logger.info(f"Selected largest DICOM group with {max_files} files")
             return largest_group
         else:
             logger.warning("No valid DICOM groups found")
@@ -168,15 +205,20 @@ class DicomFileLoader:
                 reader.SetFileName(
                     utils.encode(win32api.GetShortPathName(self.filepath), const.FS_ENCODE)
                 )
+                logger.debug("Using win32api GetShortPathName for filepath")
             except TypeError:
                 reader.SetFileName(win32api.GetShortPathName(self.filepath))
+                logger.debug("Using win32api GetShortPathName without encoding")
         else:
             try:
                 reader.SetFileName(utils.encode(self.filepath, const.FS_ENCODE))
+                logger.debug("Using encoded filepath")
             except TypeError:
                 reader.SetFileName(self.filepath)
+                logger.debug("Using filepath without encoding")
 
         if reader.Read():
+            logger.debug(f"Successfully read DICOM file: {self.filepath}")
             file = reader.GetFile()
             # Retrieve data set
             dataSet = file.GetDataSet()
@@ -195,19 +237,24 @@ class DicomFileLoader:
                 data_element = ds.GetDataElement(tag)
                 if data_element.IsEmpty():
                     encoding_value = "ISO_IR 100"
+                    logger.debug("Empty encoding element, using default ISO_IR 100")
                 else:
                     encoding_value = str(ds.GetDataElement(tag).GetValue()).split("\\")[0]
+                    logger.debug(f"Found encoding value: {encoding_value}")
 
                 if encoding_value.startswith("Loaded"):
                     encoding = "ISO_IR 100"
+                    logger.debug("Encoding value starts with 'Loaded', using ISO_IR 100")
                 else:
                     try:
                         encoding = const.DICOM_ENCODING_TO_PYTHON[encoding_value]
+                        logger.debug(f"Using encoding from mapping: {encoding}")
                     except KeyError:
                         encoding = "ISO_IR 100"
                         logger.warning(f"Unknown DICOM encoding: {encoding_value}, using default")
             else:
                 encoding = "ISO_IR 100"
+                logger.debug("No encoding element found, using default ISO_IR 100")
 
             # Iterate through the Header
             iterator = header.GetDES().begin()
@@ -376,8 +423,14 @@ def yGetDicomGroups(directory, recursive=True, gui=True):
                         if counter % 10 == 0:  # Only yield every 10 files to improve performance
                             wx.SafeYield()
 
-                    # Load the DICOM file by creating a DicomFileLoader instance
-                    DicomFileLoader(grouper, filepath)
+                    # Check if file is a valid DICOM
+                    if _is_valid_dicom(filepath):
+                        valid_dicom_counter += 1
+                        logger.debug(f"Processing valid DICOM file {counter}/{nfiles}: {name}")
+                        # Load the DICOM file by creating a DicomFileLoader instance
+                        DicomFileLoader(grouper, filepath)
+                    else:
+                        logger.debug(f"Skipping non-DICOM file {counter}/{nfiles}: {name}")
 
                 except Exception as e:
                     logger.error(f"Error processing file {name}: {str(e)}")
@@ -397,8 +450,14 @@ def yGetDicomGroups(directory, recursive=True, gui=True):
                         if counter % 10 == 0:  # Only yield every 10 files to improve performance
                             wx.SafeYield()
 
-                    # Load the DICOM file by creating a DicomFileLoader instance
-                    DicomFileLoader(grouper, filepath)
+                    # Check if file is a valid DICOM
+                    if _is_valid_dicom(filepath):
+                        valid_dicom_counter += 1
+                        logger.debug(f"Processing valid DICOM file {counter}/{nfiles}: {name}")
+                        # Load the DICOM file by creating a DicomFileLoader instance
+                        DicomFileLoader(grouper, filepath)
+                    else:
+                        logger.debug(f"Skipping non-DICOM file {counter}/{nfiles}: {name}")
 
                 except Exception as e:
                     logger.error(f"Error processing file {name}: {str(e)}")
@@ -412,7 +471,9 @@ def yGetDicomGroups(directory, recursive=True, gui=True):
 
     # Return patient groups
     patient_list = grouper.GetPatientsGroups()
-    logger.info(f"Found {len(patient_list)} patient groups")
+    logger.info(
+        f"Found {len(patient_list)} patient groups from {valid_dicom_counter} valid DICOM files"
+    )
     if gui:
         yield patient_list
     else:
@@ -777,17 +838,25 @@ def LoadDicom(directory, slice_interval=0, mode="append"):
             logger.error("No DICOM files found")
             return False
 
+        logger.info(f"Found {len(dicom_files)} DICOM files in directory")
+
         # Create a new grouper for processing these files
         logger.debug("Creating DICOM patient grouper")
         grouper = dicom_grouper.DicomPatientGrouper()
 
         # Process each DICOM file
         logger.debug(f"Processing {len(dicom_files)} DICOM files")
+        files_processed = 0
         for filepath in dicom_files:
             try:
                 DicomFileLoader(grouper, filepath)
+                files_processed += 1
+                if files_processed % 50 == 0:
+                    logger.debug(f"Processed {files_processed}/{len(dicom_files)} DICOM files")
             except Exception as e:
                 logger.error(f"Error loading DICOM file {filepath}: {str(e)}")
+
+        logger.debug(f"Finished processing {files_processed}/{len(dicom_files)} DICOM files")
 
         # Get the patient groups
         logger.debug("Getting patient groups")
@@ -795,6 +864,8 @@ def LoadDicom(directory, slice_interval=0, mode="append"):
         if not patient_groups:
             logger.error("No valid DICOM groups found")
             return False
+
+        logger.info(f"Found {len(patient_groups)} patient groups")
 
         # Select the largest group
         logger.debug("Selecting largest DICOM group")
@@ -823,6 +894,7 @@ def LoadDicom(directory, slice_interval=0, mode="append"):
                         except TypeError:
                             reader.AddFileName(path)
                 except (ImportError, TypeError):
+                    logger.warning("Error using win32api, falling back to standard method")
                     reader = vtkGDCMImageReader()
                     for file in filelist:
                         try:
@@ -839,6 +911,7 @@ def LoadDicom(directory, slice_interval=0, mode="append"):
                         reader.AddFileName(file)
 
             logger.debug(f"Added {len(filelist)} files to the reader")
+            logger.debug("Updating reader...")
             reader.Update()
             logger.debug("Reader update completed")
 
@@ -848,6 +921,7 @@ def LoadDicom(directory, slice_interval=0, mode="append"):
             if not image:
                 logger.error("Failed to get image data from DICOM reader")
                 return False
+            logger.info("Successfully created VTK image data from DICOM")
         else:
             # Fallback using pydicom and numpy to create image data
             logger.info("Using fallback DICOM reader")
@@ -877,6 +951,8 @@ def LoadDicom(directory, slice_interval=0, mode="append"):
                     try:
                         ds = pydicom.dcmread(file_path)
                         image_array[i, :, :] = ds.pixel_array
+                        if i % 20 == 0:
+                            logger.debug(f"Loaded {i + 1}/{slices} slices")
                     except Exception as e:
                         logger.error(f"Error reading DICOM file {file_path}: {str(e)}")
 
@@ -886,6 +962,7 @@ def LoadDicom(directory, slice_interval=0, mode="append"):
                 if not image:
                     logger.error("Failed to convert numpy array to vtkImageData")
                     return False
+                logger.info("Successfully created VTK image data from NumPy array")
             except ImportError:
                 logger.error("Required modules for fallback DICOM reading are not available")
                 return False
@@ -935,6 +1012,7 @@ def _is_valid_dicom(filename):
             f.seek(128)  # Skip preamble
             magic = f.read(4)
             if magic == b"DICM":
+                logger.debug(f"Found DICM magic bytes at offset 128: {filename}")
                 return True
 
             # Some DICOM files don't have the standard preamble+magic
@@ -947,11 +1025,13 @@ def _is_valid_dicom(filename):
             # Group 0002 elements are common at the start (File Meta Information)
             # Check for a valid group number with proper endianness (0x0002 or 0x0200)
             if header[0:2] == b"\x02\x00" or header[0:2] == b"\x00\x02":
+                logger.debug(f"Found DICOM group 0002 at beginning of file: {filename}")
                 return True
 
             # One more check: try to see if we can read it with GDCM
             if gdcm and hasattr(gdcm, "ImageReader"):
                 try:
+                    logger.debug(f"Attempting to read with GDCM ImageReader: {filename}")
                     reader = gdcm.ImageReader()
                     try:
                         reader.SetFileName(utils.encode(filename, const.FS_ENCODE))
@@ -960,6 +1040,8 @@ def _is_valid_dicom(filename):
                     if reader.Read():
                         logger.debug(f"File recognized as DICOM by GDCM ImageReader: {filename}")
                         return True
+                    else:
+                        logger.debug(f"GDCM ImageReader could not read file: {filename}")
                 except Exception as e:
                     logger.debug(f"GDCM ImageReader error: {str(e)}")
 

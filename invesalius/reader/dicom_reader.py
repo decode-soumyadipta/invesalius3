@@ -426,7 +426,17 @@ def yGetDicomGroups(directory, recursive=True, gui=True):
     reraise=False,
 )
 def GetDicomGroups(directory, recursive=True):
-    return list(yGetDicomGroups(directory, recursive, gui=False))
+    logger.info(f"Searching for DICOM files in directory: {directory}")
+    try:
+        patient_list = list(yGetDicomGroups(directory, recursive, gui=False))
+        if not patient_list:
+            logger.warning(f"No DICOM files found in directory: {directory}")
+        else:
+            logger.info(f"Found DICOM groups in directory: {directory}")
+        return patient_list
+    except Exception as e:
+        logger.error(f"Error searching for DICOM files: {e}")
+        return []
 
 
 class ProgressDicomReader:

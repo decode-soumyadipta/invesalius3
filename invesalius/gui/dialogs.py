@@ -2877,7 +2877,7 @@ class Panel2DConnectivity(wx.Panel):
             return 8
 
     def GetOrientation(self) -> str:
-        dic_ori = {_("Axial"): "AXIAL", _("Coronal"): "CORONAL", _("Sagital"): "SAGITAL"}
+        dic_ori = {_("Axial"): "AXIAL", _("Coronal"): "CORONAL", _("Sagital"): "SAGITTAL"}
 
         return dic_ori[self.cmb_orientation.GetStringSelection()]
 
@@ -6003,7 +6003,7 @@ class CreateBrainTargetDialog(wx.Dialog):
             vtkmat = brain_target_actor.GetMatrix()
             narray = np.eye(4)
             vtkmat.DeepCopy(narray.ravel(), vtkmat)
-            position = [narray[0][-1], -narray[1][-1], narray[2][-1]]
+            position: List[np.float64] = [narray[0][-1], -narray[1][-1], narray[2][-1]]
             m_rotation = [narray[0][:3], narray[1][:3], narray[2][:3]]
             orientation = np.rad2deg(tr.euler_from_matrix(m_rotation, axes="sxyz"))
             brain_target_position.append(position)
@@ -6346,6 +6346,9 @@ class GoToDialogScannerCoord(wx.Dialog):
         self.goto_sagital = wx.TextCtrl(self, size=(50, -1))
         self.goto_coronal = wx.TextCtrl(self, size=(50, -1))
         self.goto_axial = wx.TextCtrl(self, size=(50, -1))
+        
+        # Initialize result attribute
+        self.result = None
 
         btn_ok = wx.Button(self, wx.ID_OK)
         btn_ok.SetHelpText("")
@@ -6392,7 +6395,8 @@ class GoToDialogScannerCoord(wx.Dialog):
         Publisher.subscribe(self.SetNewFocalPoint, "Cross focal point")
 
     def SetNewFocalPoint(self, coord, spacing):
-        Publisher.sendMessage("Update cross pos", coord=self.result * spacing)
+        if self.result is not None:
+            Publisher.sendMessage("Update cross pos", coord=self.result * spacing)
 
     def OnOk(self, evt: wx.CommandEvent) -> None:
         import invesalius.data.slice_ as slc

@@ -157,14 +157,23 @@ class DicomGroup:
             logger.debug(f"Final sorted file list contains {len(filelist)} files")
 
             # Check if z-spacing was computed by GDCM
+            spacing_computed = False
             try:
                 computed_spacing = sorter.GetZSpacing()
                 if computed_spacing > 0:
                     logger.debug(f"GDCM computed Z spacing: {computed_spacing}")
+                    self.zspacing = computed_spacing
+                    spacing_computed = True
                 else:
-                    logger.warning("GDCM could not compute Z spacing")
+                    logger.warning("GDCM could not compute Z spacing, will calculate manually")
             except Exception as e:
                 logger.warning(f"Error retrieving computed Z spacing from GDCM: {str(e)}")
+
+            # If GDCM failed to compute spacing, calculate it manually
+            if not spacing_computed:
+                logger.info("Calculating Z spacing manually from slice positions")
+                self.UpdateZSpacing()
+                logger.info(f"Manually calculated Z spacing: {self.zspacing}")
 
             # Special handling for breast-CT of koning manufacturing (KBCT)
             try:
@@ -197,7 +206,7 @@ class DicomGroup:
 
             if len(list_) > 1:
                 dicom = list_[0]
-                axis = ORIENT_MAP[dicom.image.orientation_label]
+                axis = ORIENT_MAP.get(dicom.image.orientation_label, 2)  # Default to AXIAL if unknown
                 p1 = dicom.image.position[axis]
 
                 dicom = list_[1]
@@ -235,9 +244,24 @@ class PatientGroup:
         """Add a DICOM file to the appropriate group."""
         try:
             # Get DICOM group key
+            # Use equipment name if available, otherwise use "Unknown"
+            try:
+                equipment = dicom.acquisition.equipment_model
+            except AttributeError:
+                try:
+                    equipment = dicom.acquisition.equipment_name
+                except AttributeError:
+                    equipment = "Unknown"
+
+            # Convert series number to int if possible, otherwise use as string
+            try:
+                serie_number = int(dicom.acquisition.serie_number)
+            except (ValueError, TypeError):
+                serie_number = dicom.acquisition.serie_number
+
             key = (
-                dicom.acquisition.serie_number,
-                dicom.acquisition.equipment_model,
+                serie_number,
+                equipment,
                 dicom.image.orientation_label,
             )
             logger.debug(f"Processing DICOM file with key: {key}")
@@ -256,9 +280,14 @@ class PatientGroup:
 
             # Update group title
             group = self.groups_dict[key]
-            group.title = "%d %s %s" % (
-                dicom.acquisition.serie_number,
-                dicom.acquisition.protocol_name,
+            try:
+                protocol_name = dicom.acquisition.protocol_name
+            except AttributeError:
+                protocol_name = "Unknown Protocol"
+
+            group.title = "{} {} {}".format(
+                serie_number,
+                protocol_name,
                 dicom.image.orientation_label,
             )
             logger.debug(f"Updated group {group.index} title to: {group.title}")
@@ -267,7 +296,7 @@ class PatientGroup:
             logger.error("Error adding DICOM file to patient group", exc_info=True)
             raise DicomError(
                 "Failed to add DICOM file to patient group",
-                details={"serie_number": dicom.acquisition.serie_number},
+                details={"serie_number": getattr(dicom.acquisition, "serie_number", "Unknown")},
                 original_exception=e,
             )
 

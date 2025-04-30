@@ -239,21 +239,64 @@ def FixGantryTilt(matrix, spacing, tilt):
 )
 def BuildEditedImage(imagedata, points):
     """
-    Return a new vtkImageData created from modified spacing/origin values.
-    imagedata: original vtkImageData.
-    points: list of points containing the origin and spacing values.
+    Editing the original image in accordance with the edit
+    points in the editor, it is necessary to generate the
+    vtkPolyData via vtkContourFilter
     """
-    logger.debug("Building edited image from modified spacing/origin values")
-    spacing = points[1] - points[0]
-    origin = points[0]
+    logger.debug("Building edited image with points")
+    init_values = None
+    for point in points:
+        x, y, z = point
+        colour = points[point]
+        imagedata.SetScalarComponentFromDouble(x, y, z, 0, colour)
+        imagedata.Update()
 
-    # Copy imagedata
-    output = vtk_utils.create_imagedata_from_copy(imagedata)
-    output.SetSpacing(spacing)
-    output.SetOrigin(origin)
+        if not (init_values):
+            xi = x
+            xf = x
+            yi = y
+            yf = y
+            zi = z
+            zf = z
+            init_values = 1
+
+        if xi > x:
+            xi = x
+        elif xf < x:
+            xf = x
+
+        if yi > y:
+            yi = y
+        elif yf < y:
+            yf = y
+
+        if zi > z:
+            zi = z
+        elif zf < z:
+            zf = z
+
+    logger.debug(f"Clipping image with extent: ({xi}, {xf}), ({yi}, {yf}), ({zi}, {zf})")
+    clip = vtkImageClip()
+    clip.SetInputData(imagedata)
+    clip.SetOutputWholeExtent(xi, xf, yi, yf, zi, zf)
+    clip.Update()
+
+    logger.debug("Applying Gaussian smoothing")
+    gauss = vtkImageGaussianSmooth()
+    gauss.SetInputData(clip.GetOutput())
+    gauss.SetRadiusFactor(0.6)
+    gauss.Update()
+
+    logger.debug("Appending images")
+    app = vtkImageAppend()
+    app.PreserveExtentsOn()
+    app.SetAppendAxis(2)
+    app.SetInputData(0, imagedata)
+    app.SetInputData(1, gauss.GetOutput())
+    app.Update()
 
     logger.debug("Edited image built successfully")
-    return output
+    return app.GetOutput()
 
 
 def Export(imagedata, filename, bin=False):

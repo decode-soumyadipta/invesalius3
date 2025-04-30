@@ -52,6 +52,11 @@ import invesalius.constants as const
 import invesalius.data.vtk_utils as vu
 from invesalius.i18n import tr as _
 from invesalius.utils import touch
+from invesalius.enhanced_logging import get_logger
+from invesalius.error_handling import handle_errors, SurfaceError, ErrorCategory
+
+# Initialize logger for this module
+logger = get_logger("invesalius.data.polydata_utils")
 
 if sys.platform == "win32":
     try:
@@ -60,6 +65,7 @@ if sys.platform == "win32":
         _has_win32api = True
     except ImportError:
         _has_win32api = False
+        logger.warning("win32api module not available on Windows, using fallback path handling")
 else:
     _has_win32api = False
 
@@ -67,143 +73,252 @@ else:
 UpdateProgress = vu.ShowProgress()
 
 
+@handle_errors(error_message="Error applying decimation filter", category=ErrorCategory.SURFACE)
 def ApplyDecimationFilter(polydata: vtkPolyData, reduction_factor: float) -> vtkPolyData:
     """
     Reduce number of triangles of the given vtkPolyData, based on
     reduction_factor.
     """
-    # Important: vtkQuadricDecimation presented better results than
-    # vtkDecimatePro
-    decimation = vtkQuadricDecimation()
-    decimation.SetInputData(polydata)
-    decimation.SetTargetReduction(reduction_factor)
-    decimation.GetOutput().ReleaseDataFlagOn()
-    decimation.AddObserver(
-        "ProgressEvent",
-        lambda obj, evt: UpdateProgress(decimation, "Reducing number of triangles..."),
-    )
-    return decimation.GetOutput()
+    logger.debug(f"Applying decimation filter with reduction factor: {reduction_factor}")
+    
+    try:
+        # Important: vtkQuadricDecimation presented better results than
+        # vtkDecimatePro
+        decimation = vtkQuadricDecimation()
+        decimation.SetInputData(polydata)
+        decimation.SetTargetReduction(reduction_factor)
+        decimation.GetOutput().ReleaseDataFlagOn()
+        decimation.AddObserver(
+            "ProgressEvent",
+            lambda obj, evt: UpdateProgress(decimation, "Reducing number of triangles..."),
+        )
+        decimation.Update()
+        
+        output = decimation.GetOutput()
+        logger.debug(f"Decimation completed. Original cells: {polydata.GetNumberOfCells()}, New cells: {output.GetNumberOfCells()}")
+        return output
+    except Exception as e:
+        logger.error(f"Error applying decimation filter: {str(e)}")
+        raise SurfaceError(f"Failed to apply decimation filter: {str(e)}",
+                       details={"reduction_factor": reduction_factor},
+                       original_exception=e)
 
 
+@handle_errors(error_message="Error applying smooth filter", category=ErrorCategory.SURFACE)
 def ApplySmoothFilter(
     polydata: vtkPolyData, iterations: int, relaxation_factor: float
 ) -> vtkPolyData:
     """
     Smooth given vtkPolyData surface, based on iteration and relaxation_factor.
     """
-    smoother = vtkSmoothPolyDataFilter()
-    smoother.SetInputData(polydata)
-    smoother.SetNumberOfIterations(iterations)
-    smoother.SetFeatureAngle(80)
-    smoother.SetRelaxationFactor(relaxation_factor)
-    smoother.FeatureEdgeSmoothingOff()
-    smoother.BoundarySmoothingOff()
-    smoother.Update()
-    filler = vtkFillHolesFilter()
-    filler.SetInputConnection(smoother.GetOutputPort())
-    filler.SetHoleSize(1000)
-    filler.Update()
-    smoother.AddObserver(
-        "ProgressEvent", lambda obj, evt: UpdateProgress(smoother, "Smoothing surface...")
-    )
+    logger.debug(f"Applying smooth filter with iterations: {iterations}, relaxation factor: {relaxation_factor}")
+    
+    try:
+        smoother = vtkSmoothPolyDataFilter()
+        smoother.SetInputData(polydata)
+        smoother.SetNumberOfIterations(iterations)
+        smoother.SetFeatureAngle(80)
+        smoother.SetRelaxationFactor(relaxation_factor)
+        smoother.FeatureEdgeSmoothingOff()
+        smoother.BoundarySmoothingOff()
+        smoother.Update()
+        filler = vtkFillHolesFilter()
+        filler.SetInputConnection(smoother.GetOutputPort())
+        filler.SetHoleSize(1000)
+        filler.Update()
+        smoother.AddObserver(
+            "ProgressEvent", lambda obj, evt: UpdateProgress(smoother, "Smoothing surface...")
+        )
 
-    return filler.GetOutput()
+        output = filler.GetOutput()
+        logger.debug("Smoothing and hole filling completed")
+        return output
+    except Exception as e:
+        logger.error(f"Error applying smooth filter: {str(e)}")
+        raise SurfaceError(f"Failed to apply smooth filter: {str(e)}",
+                      details={"iterations": iterations, "relaxation_factor": relaxation_factor},
+                      original_exception=e)
 
 
+@handle_errors(error_message="Error filling surface holes", category=ErrorCategory.SURFACE)
 def FillSurfaceHole(polydata: vtkPolyData) -> "vtkPolyData":
     """
     Fill holes in the given polydata.
     """
-    # Filter used to detect and fill holes. Only fill
-    print("Filling polydata")
-    filled_polydata = vtkFillHolesFilter()
-    filled_polydata.SetInputData(polydata)
-    filled_polydata.SetHoleSize(500)
-    return filled_polydata.GetOutput()
+    logger.debug("Filling surface holes")
+    
+    try:
+        # Filter used to detect and fill holes. Only fill
+        logger.info("Filling polydata")
+        filled_polydata = vtkFillHolesFilter()
+        filled_polydata.SetInputData(polydata)
+        filled_polydata.SetHoleSize(500)
+        filled_polydata.Update()
+        
+        output = filled_polydata.GetOutput()
+        logger.debug("Surface hole filling completed")
+        return output
+    except Exception as e:
+        logger.error(f"Error filling surface holes: {str(e)}")
+        raise SurfaceError(f"Failed to fill surface holes: {str(e)}",
+                      original_exception=e)
 
 
+@handle_errors(error_message="Error calculating surface volume", category=ErrorCategory.SURFACE)
 def CalculateSurfaceVolume(polydata: vtkPolyData) -> float:
     """
     Calculate the volume from the given polydata
     """
-    # Filter used to calculate volume and area from a polydata
-    measured_polydata = vtkMassProperties()
-    measured_polydata.SetInputData(polydata)
-    return measured_polydata.GetVolume()
+    logger.debug("Calculating surface volume")
+    
+    try:
+        # Filter used to calculate volume and area from a polydata
+        measured_polydata = vtkMassProperties()
+        measured_polydata.SetInputData(polydata)
+        volume = measured_polydata.GetVolume()
+        logger.debug(f"Surface volume calculated: {volume}")
+        return volume
+    except Exception as e:
+        logger.error(f"Error calculating surface volume: {str(e)}")
+        raise SurfaceError(f"Failed to calculate surface volume: {str(e)}",
+                      original_exception=e)
 
 
+@handle_errors(error_message="Error calculating surface area", category=ErrorCategory.SURFACE)
 def CalculateSurfaceArea(polydata: vtkPolyData) -> float:
     """
     Calculate the volume from the given polydata
     """
-    # Filter used to calculate volume and area from a polydata
-    measured_polydata = vtkMassProperties()
-    measured_polydata.SetInputData(polydata)
-    return measured_polydata.GetSurfaceArea()
-
-
-def Merge(polydata_list: Iterable[vtkPolyData]) -> vtkPolyData:
-    append = vtkAppendPolyData()
-
-    for polydata in polydata_list:
-        triangle = vtkTriangleFilter()
-        triangle.SetInputData(polydata)
-        triangle.Update()
-        append.AddInputData(triangle.GetOutput())
-
-    append.Update()
-    clean = vtkCleanPolyData()
-    clean.SetInputData(append.GetOutput())
-    clean.Update()
-
-    return append.GetOutput()
-
-
-def Export(polydata: vtkPolyData, filename: str, bin: bool = False) -> None:
-    writer = vtkXMLPolyDataWriter()
-    if _has_win32api:
-        touch(filename)
-        filename = win32api.GetShortPathName(filename)
-    writer.SetFileName(filename.encode(const.FS_ENCODE))
-    if bin:
-        writer.SetDataModeToBinary()
-    else:
-        writer.SetDataModeToAscii()
-    writer.SetInputData(polydata)
-    writer.Write()
-
-
-def Import(filename: str) -> vtkPolyData:
-    reader = vtkXMLPolyDataReader()
+    logger.debug("Calculating surface area")
+    
     try:
-        reader.SetFileName(filename.encode())
-    except AttributeError:
-        reader.SetFileName(filename)
-    reader.Update()
-    return reader.GetOutput()
+        # Filter used to calculate volume and area from a polydata
+        measured_polydata = vtkMassProperties()
+        measured_polydata.SetInputData(polydata)
+        area = measured_polydata.GetSurfaceArea()
+        logger.debug(f"Surface area calculated: {area}")
+        return area
+    except Exception as e:
+        logger.error(f"Error calculating surface area: {str(e)}")
+        raise SurfaceError(f"Failed to calculate surface area: {str(e)}",
+                      original_exception=e)
 
 
-def LoadPolydata(path: str) -> vtkPolyData:
-    if path.lower().endswith(".stl"):
-        reader = vtkSTLReader()
+@handle_errors(error_message="Error merging polydata", category=ErrorCategory.SURFACE)
+def Merge(polydata_list: Iterable[vtkPolyData]) -> vtkPolyData:
+    logger.debug(f"Merging {len(list(polydata_list))} polydata objects")
+    
+    try:
+        append = vtkAppendPolyData()
 
-    elif path.lower().endswith(".ply"):
-        reader = vtkPLYReader()
+        for polydata in polydata_list:
+            triangle = vtkTriangleFilter()
+            triangle.SetInputData(polydata)
+            triangle.Update()
+            append.AddInputData(triangle.GetOutput())
 
-    elif path.lower().endswith(".obj"):
-        reader = vtkOBJReader()
+        append.Update()
+        clean = vtkCleanPolyData()
+        clean.SetInputData(append.GetOutput())
+        clean.Update()
 
-    elif path.lower().endswith(".vtp"):
+        output = append.GetOutput()
+        logger.debug(f"Polydata merge completed, resulting in {output.GetNumberOfCells()} cells")
+        return output
+    except Exception as e:
+        logger.error(f"Error merging polydata: {str(e)}")
+        raise SurfaceError(f"Failed to merge polydata: {str(e)}",
+                      original_exception=e)
+
+
+@handle_errors(error_message="Error exporting polydata", category=ErrorCategory.IO)
+def Export(polydata: vtkPolyData, filename: str, bin: bool = False) -> None:
+    logger.debug(f"Exporting polydata to {filename}, binary={bin}")
+    
+    try:
+        writer = vtkXMLPolyDataWriter()
+        if _has_win32api:
+            touch(filename)
+            filename = win32api.GetShortPathName(filename)
+        writer.SetFileName(filename.encode(const.FS_ENCODE))
+        if bin:
+            writer.SetDataModeToBinary()
+        else:
+            writer.SetDataModeToAscii()
+        writer.SetInputData(polydata)
+        writer.Write()
+        logger.info(f"Successfully exported polydata to {filename}")
+    except Exception as e:
+        logger.error(f"Error exporting polydata to {filename}: {str(e)}")
+        raise SurfaceError(f"Failed to export polydata: {str(e)}",
+                      details={"filename": filename, "binary": bin},
+                      original_exception=e)
+
+
+@handle_errors(error_message="Error importing polydata", category=ErrorCategory.IO)
+def Import(filename: str) -> vtkPolyData:
+    logger.debug(f"Importing polydata from {filename}")
+    
+    try:
         reader = vtkXMLPolyDataReader()
+        try:
+            reader.SetFileName(filename.encode())
+        except AttributeError:
+            reader.SetFileName(filename)
+        reader.Update()
+        
+        output = reader.GetOutput()
+        logger.debug(f"Successfully imported polydata with {output.GetNumberOfCells()} cells")
+        return output
+    except Exception as e:
+        logger.error(f"Error importing polydata from {filename}: {str(e)}")
+        raise SurfaceError(f"Failed to import polydata: {str(e)}",
+                      details={"filename": filename},
+                      original_exception=e)
 
-    else:
-        assert False, "Not a valid extension."
 
-    reader.SetFileName(path)
-    reader.Update()
-    polydata = reader.GetOutput()
+@handle_errors(error_message="Error loading polydata", category=ErrorCategory.IO)
+def LoadPolydata(path: str) -> vtkPolyData:
+    logger.debug(f"Loading polydata from {path}")
+    
+    try:
+        if path.lower().endswith(".stl"):
+            logger.debug("Using STL reader")
+            reader = vtkSTLReader()
 
-    return polydata
+        elif path.lower().endswith(".ply"):
+            logger.debug("Using PLY reader")
+            reader = vtkPLYReader()
+
+        elif path.lower().endswith(".obj"):
+            logger.debug("Using OBJ reader")
+            reader = vtkOBJReader()
+
+        elif path.lower().endswith(".vtp"):
+            logger.debug("Using XML polydata reader")
+            reader = vtkXMLPolyDataReader()
+
+        else:
+            logger.error(f"Unsupported file format: {path}")
+            raise SurfaceError(f"Unsupported file format: {path}",
+                          details={"path": path})
+
+        if _has_win32api:
+            reader.SetFileName(win32api.GetShortPathName(path).encode(const.FS_ENCODE))
+        else:
+            reader.SetFileName(path.encode(const.FS_ENCODE))
+        reader.Update()
+
+        output = reader.GetOutput()
+        logger.debug(f"Successfully loaded polydata with {output.GetNumberOfCells()} cells")
+        return output
+    except Exception as e:
+        if not isinstance(e, SurfaceError):
+            logger.error(f"Error loading polydata from {path}: {str(e)}")
+            raise SurfaceError(f"Failed to load polydata: {str(e)}",
+                          details={"path": path},
+                          original_exception=e)
+        raise
 
 
 def JoinSeedsParts(polydata: vtkPolyData, point_id_list: List[int]) -> vtkPolyData:

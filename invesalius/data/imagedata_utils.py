@@ -41,70 +41,91 @@ import invesalius.gui.dialogs as dlg
 import invesalius.reader.bitmap_reader as bitmap_reader
 from invesalius.data import vtk_utils as vtk_utils
 from invesalius.i18n import tr as _
+from invesalius.enhanced_logging import get_logger
+from invesalius.error_handling import handle_errors, InVesaliusException, ErrorCategory
+
+# Initialize logger for this module
+logger = get_logger("invesalius.data.imagedata_utils")
 
 # TODO: Test cases which are originally in sagittal/coronal orientation
 # and have gantry
 
 
+@handle_errors(error_message="Error resampling 3D image", category=ErrorCategory.RENDERING)
 def ResampleImage3D(imagedata, value):
     """
     Resample vtkImageData matrix.
     """
-    spacing = imagedata.GetSpacing()
-    extent = imagedata.GetExtent()
-    size = imagedata.GetDimensions()
+    logger.debug(f"Resampling 3D image with value {value}")
+    
+    try:
+        spacing = imagedata.GetSpacing()
+        extent = imagedata.GetExtent()
+        size = imagedata.GetDimensions()
 
-    # width = float(size[0])
-    height = float(size[1] / value)
+        # width = float(size[0])
+        height = float(size[1] / value)
 
-    resolution = (height / (extent[1] - extent[0]) + 1) * spacing[1]
+        resolution = (height / (extent[1] - extent[0]) + 1) * spacing[1]
 
-    resample = vtkImageResample()
-    resample.SetInput(imagedata)
-    resample.SetAxisMagnificationFactor(0, resolution)
-    resample.SetAxisMagnificationFactor(1, resolution)
+        resample = vtkImageResample()
+        resample.SetInput(imagedata)
+        resample.SetAxisMagnificationFactor(0, resolution)
+        resample.SetAxisMagnificationFactor(1, resolution)
 
-    return resample.GetOutput()
+        logger.debug(f"3D image resampled with resolution {resolution}")
+        return resample.GetOutput()
+    except Exception as e:
+        logger.error(f"Error resampling 3D image: {str(e)}")
+        raise
 
 
+@handle_errors(error_message="Error resampling 2D image", category=ErrorCategory.RENDERING)
 def ResampleImage2D(imagedata, px=None, py=None, resolution_percentage=None, update_progress=None):
     """
     Resample vtkImageData matrix.
     """
+    logger.debug(f"Resampling 2D image with px={px}, py={py}, resolution_percentage={resolution_percentage}")
+    
+    try:
+        extent = imagedata.GetExtent()
+        # spacing = imagedata.GetSpacing()
+        # dimensions = imagedata.GetDimensions()
 
-    extent = imagedata.GetExtent()
-    # spacing = imagedata.GetSpacing()
-    # dimensions = imagedata.GetDimensions()
-
-    if resolution_percentage:
-        factor_x = resolution_percentage
-        factor_y = resolution_percentage
-    else:
-        if abs(extent[1] - extent[3]) < abs(extent[3] - extent[5]):
-            f = extent[1]
-        elif abs(extent[1] - extent[5]) < abs(extent[1] - extent[3]):
-            f = extent[1]
-        elif abs(extent[3] - extent[5]) < abs(extent[1] - extent[3]):
-            f = extent[3]
+        if resolution_percentage:
+            factor_x = resolution_percentage
+            factor_y = resolution_percentage
         else:
-            f = extent[1]
+            if abs(extent[1] - extent[3]) < abs(extent[3] - extent[5]):
+                f = extent[1]
+            elif abs(extent[1] - extent[5]) < abs(extent[1] - extent[3]):
+                f = extent[1]
+            elif abs(extent[3] - extent[5]) < abs(extent[1] - extent[3]):
+                f = extent[3]
+            else:
+                f = extent[1]
 
-        factor_x = px / float(f + 1)
-        factor_y = py / float(f + 1)
+            factor_x = px / float(f + 1)
+            factor_y = py / float(f + 1)
 
-    resample = vtkImageResample()
-    resample.SetInputData(imagedata)
-    resample.SetAxisMagnificationFactor(0, factor_x)
-    resample.SetAxisMagnificationFactor(1, factor_y)
-    #  resample.SetOutputSpacing(spacing[0] * factor_x, spacing[1] * factor_y, spacing[2])
-    if update_progress:
-        message = _("Generating multiplanar visualization...")
-        resample.AddObserver("ProgressEvent", lambda obj, evt: update_progress(resample, message))
-    resample.Update()
+        resample = vtkImageResample()
+        resample.SetInputData(imagedata)
+        resample.SetAxisMagnificationFactor(0, factor_x)
+        resample.SetAxisMagnificationFactor(1, factor_y)
+        #  resample.SetOutputSpacing(spacing[0] * factor_x, spacing[1] * factor_y, spacing[2])
+        if update_progress:
+            message = _("Generating multiplanar visualization...")
+            resample.AddObserver("ProgressEvent", lambda obj, evt: update_progress(resample, message))
+        resample.Update()
 
-    return resample.GetOutput()
+        logger.debug(f"2D image resampled with factors x={factor_x}, y={factor_y}")
+        return resample.GetOutput()
+    except Exception as e:
+        logger.error(f"Error resampling 2D image: {str(e)}")
+        raise
 
 
+@handle_errors(error_message="Error resizing slice", category=ErrorCategory.RENDERING)
 def resize_slice(im_array, resolution_percentage):
     """
     Uses ndimage.zoom to resize a slice.
@@ -113,44 +134,127 @@ def resize_slice(im_array, resolution_percentage):
         im_array: slice as a numpy array.
         resolution_percentage: percentage of resize.
     """
-    out = zoom(im_array, resolution_percentage, im_array.dtype, order=2)
-    return out
+    logger.debug(f"Resizing slice with resolution_percentage={resolution_percentage}")
+    
+    try:
+        out = zoom(im_array, resolution_percentage, im_array.dtype, order=2)
+        return out
+    except Exception as e:
+        logger.error(f"Error resizing slice: {str(e)}")
+        raise
 
 
+@handle_errors(error_message="Error resizing image array", category=ErrorCategory.RENDERING)
 def resize_image_array(image, resolution_percentage, as_mmap=False):
-    out = zoom(image, resolution_percentage, image.dtype, order=2)
-    if as_mmap:
-        fd, fname = tempfile.mkstemp(suffix="_resized")
-        out_mmap = np.memmap(fname, shape=out.shape, dtype=out.dtype, mode="w+")
-        out_mmap[:] = out
-        os.close(fd)
-        return out_mmap
-    return out
+    logger.debug(f"Resizing image array with resolution_percentage={resolution_percentage}, as_mmap={as_mmap}")
+    
+    try:
+        out = zoom(image, resolution_percentage, image.dtype, order=2)
+        if as_mmap:
+            fd, fname = tempfile.mkstemp(suffix="_resized")
+            out_mmap = np.memmap(fname, shape=out.shape, dtype=out.dtype, mode="w+")
+            out_mmap[:] = out
+            os.close(fd)
+            logger.debug(f"Created memory-mapped resized image at {fname}")
+            return out_mmap
+        return out
+    except Exception as e:
+        logger.error(f"Error resizing image array: {str(e)}")
+        raise
 
 
+@handle_errors(error_message="Error reading DCM slice", category=ErrorCategory.DICOM)
 def read_dcm_slice_as_np2(filename, resolution_percentage=1.0):
-    reader = gdcm.ImageReader()
-    reader.SetFileName(filename)
-    reader.Read()
-    image = reader.GetImage()
-    output = converters.gdcm_to_numpy(image)
-    if resolution_percentage < 1.0:
-        output = zoom(output, resolution_percentage)
-    return output
+    logger.debug(f"Reading DCM slice from {filename} with resolution_percentage={resolution_percentage}")
+    
+    try:
+        reader = gdcm.ImageReader()
+        reader.SetFileName(filename)
+        if not reader.Read():
+            logger.error(f"Failed to read DICOM file: {filename}")
+            raise InVesaliusException(f"Failed to read DICOM file: {filename}")
+            
+        image = reader.GetImage()
+        output = converters.gdcm_to_numpy(image)
+        if resolution_percentage < 1.0:
+            logger.debug(f"Applying resolution_percentage={resolution_percentage} to DCM slice")
+            output = zoom(output, resolution_percentage)
+        return output
+    except Exception as e:
+        logger.error(f"Error reading DCM slice as numpy array: {str(e)}")
+        raise
 
 
+@handle_errors(error_message="Error fixing gantry tilt", category=ErrorCategory.DICOM)
 def FixGantryTilt(matrix, spacing, tilt):
     """
     Fix gantry tilt given a vtkImageData and the tilt value. Return new
     vtkImageData.
     """
-    angle = np.radians(tilt)
-    spacing = spacing[0], spacing[1], spacing[2]
-    gntan = math.tan(angle)
+    logger.debug(f"Fixing gantry tilt with tilt={tilt}, spacing={spacing}")
+    
+    try:
+        angle = np.radians(tilt)
+        spacing = spacing[0], spacing[1], spacing[2]
+        gntan = math.tan(angle)
 
-    for n, slice_ in enumerate(matrix):
-        offset = gntan * n * spacing[2]
-        matrix[n] = shift(slice_, (-offset / spacing[1], 0), cval=matrix.min())
+        for n, slice_ in enumerate(matrix):
+            offset = gntan * n * spacing[2]
+            matrix[n] = shift(slice_, (-offset / spacing[1], 0), cval=matrix.min())
+            
+        logger.debug("Gantry tilt correction completed")
+    except Exception as e:
+        logger.error(f"Error fixing gantry tilt: {str(e)}")
+        raise
+
+
+@handle_errors(error_message="Error creating DICOM thumbnails", category=ErrorCategory.DICOM)
+def create_dicom_thumbnails(image, window=None, level=None):
+    """
+    Create thumbnail from DICOM.
+    """
+    logger.debug("Creating DICOM thumbnail")
+    
+    try:
+        fd, thumbnail_path = tempfile.mkstemp(suffix=".jpg")
+        os.close(fd)
+        
+        # Get DICOM image as a numpy array
+        sx, sy = image.GetDimensions()
+        pixels = numpy_support.vtk_to_numpy(image.GetPointData().GetScalars())
+        
+        # Handle dimensional data
+        if image.GetNumberOfScalarComponents() == 1:
+            pixels = pixels.reshape(sy, sx)
+            
+            if window and level:
+                pixels = get_LUT_value_255(pixels, window, level)
+            else:
+                pixels = pixels.astype(np.float64)
+                # Normalize
+                min_ = pixels.min()
+                max_ = pixels.max()
+                if min_ != max_:
+                    pixels = ((pixels - min_) / (max_ - min_)) * 255
+                pixels = pixels.astype(np.uint8)
+        
+        # Convert from RGB to grayscale if necessary
+        if image.GetNumberOfScalarComponents() >= 3:
+            if pixels.max() > 0:
+                temp_array = pixels.reshape(sy, sx, image.GetNumberOfScalarComponents())
+                pixels = rgb2gray(temp_array) * 255
+            else:
+                pixels = pixels.reshape(sy, sx, image.GetNumberOfScalarComponents())
+                pixels = pixels[..., 0] * 0.0
+        
+        pixels = pixels.astype(np.uint8)
+        # Write thumbnail
+        imageio.imsave(thumbnail_path, pixels)
+        logger.debug(f"DICOM thumbnail created at {thumbnail_path}")
+        return thumbnail_path
+    except Exception as e:
+        logger.error(f"Error creating DICOM thumbnails: {str(e)}")
+        raise
 
 
 def BuildEditedImage(imagedata, points):
@@ -254,36 +358,6 @@ def ExtractVOI(imagedata, xi, xf, yi, yf, zi, zf):
     voi.SetSampleRate(1, 1, 1)
     voi.Update()
     return voi.GetOutput()
-
-
-def create_dicom_thumbnails(image, window=None, level=None):
-    pf = image.GetPixelFormat()
-    np_image = converters.gdcm_to_numpy(image, pf.GetSamplesPerPixel() == 1)
-    if window is None or level is None:
-        _min, _max = np_image.min(), np_image.max()
-        window = _max - _min
-        level = _min + window / 2
-
-    if image.GetNumberOfDimensions() >= 3:
-        thumbnail_paths = []
-        for i in range(np_image.shape[0]):
-            thumb_image = zoom(np_image[i], 0.25)
-            thumb_image = np.array(get_LUT_value_255(thumb_image, window, level), dtype=np.uint8)
-            fd, thumbnail_path = tempfile.mkstemp(prefix="thumb_", suffix=".png")
-            imageio.imsave(thumbnail_path, thumb_image)
-            thumbnail_paths.append(thumbnail_path)
-            os.close(fd)
-        return thumbnail_paths
-    else:
-        fd, thumbnail_path = tempfile.mkstemp(prefix="thumb_", suffix=".png")
-        if pf.GetSamplesPerPixel() == 1:
-            thumb_image = zoom(np_image, 0.25)
-            thumb_image = np.array(get_LUT_value_255(thumb_image, window, level), dtype=np.uint8)
-        else:
-            thumb_image = zoom(np_image, (0.25, 0.25, 1))
-        imageio.imsave(thumbnail_path, thumb_image)
-        os.close(fd)
-        return thumbnail_path
 
 
 def array2memmap(arr, filename=None):

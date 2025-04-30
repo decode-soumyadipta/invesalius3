@@ -38,6 +38,11 @@ import invesalius.utils as utils
 from invesalius import inv_paths
 from invesalius.i18n import tr as _
 from invesalius.pubsub import pub as Publisher
+from invesalius.enhanced_logging import get_logger
+from invesalius.error_handling import handle_errors, RenderingError, ErrorCategory
+
+# Initialize logger for this module
+logger = get_logger("invesalius.data.vtk_utils")
 
 if TYPE_CHECKING:
     import numpy as np
@@ -56,6 +61,7 @@ class ProgressDialog:
         if abort:
             self.style = wx.PD_APP_MODAL | wx.PD_CAN_ABORT
 
+        logger.debug(f"Creating progress dialog with maximum={maximum}, abort={abort}")
         self.dlg = wx.ProgressDialog(
             self.title, self.msg, maximum=self.maximum, parent=parent, style=self.style
         )
@@ -64,6 +70,7 @@ class ProgressDialog:
         self.dlg.SetSize(wx.Size(250, 150))
 
     def Cancel(self, evt: wx.CommandEvent) -> None:
+        logger.info("Progress dialog cancel button pressed")
         Publisher.sendMessage("Cancel DICOM load")
 
     def Update(self, value: SupportsInt, message: str) -> Union[Tuple[bool, bool], bool]:
@@ -73,11 +80,13 @@ class ProgressDialog:
             # TODO:
             # Exception in the Wtindows XP 64 Bits with wxPython 2.8.10
             except wx.PyAssertionError:
+                logger.warning("wx.PyAssertionError in progress dialog update")
                 return True
         else:
             return False
 
     def Close(self) -> None:
+        logger.debug("Closing progress dialog")
         self.dlg.Destroy()
 
 
@@ -88,6 +97,7 @@ if sys.platform == "win32":
         _has_win32api = True
     except ImportError:
         _has_win32api = False
+        logger.warning("win32api module not available on Windows, using fallback path handling")
 else:
     _has_win32api = False
 
@@ -102,6 +112,7 @@ else:
 # http://jjinux.blogspot.com/2006/10/python-modifying-counter-in-closure.html
 
 
+@handle_errors(error_message="Error showing progress", category=ErrorCategory.USER_INTERFACE)
 def ShowProgress(
     number_of_filters: int = 1, dialog_type: str = "GaugeProgress"
 ) -> Callable[[Union[float, int, "vtkAlgorithm"], str], float]:
@@ -112,10 +123,14 @@ def ShowProgress(
     """
     progress: List[float] = [0]
     last_obj_progress: List[float] = [0]
+    
+    logger.debug(f"Creating progress handler with {number_of_filters} filters, type={dialog_type}")
+    
     if dialog_type == "ProgressDialog":
         try:
             dlg = ProgressDialog(wx.GetApp().GetTopWindow(), 100)
-        except (wx.PyNoAppError, AttributeError):
+        except (wx.PyNoAppError, AttributeError) as e:
+            logger.warning(f"Failed to create progress dialog: {str(e)}")
             return lambda obj, label: 0
 
     # when the pipeline is larger than 1, we have to consider this object
@@ -127,36 +142,42 @@ def ShowProgress(
         """
         Show progress on GUI according to pipeline execution.
         """
-        # object progress is cummulative and is between 0.0 - 1.0
-        # is necessary verify in case is sending the progress
-        # represented by number in case multiprocess, not vtk object
-        if isinstance(obj, float) or isinstance(obj, int):
-            obj_progress = obj
-        else:
-            obj_progress = obj.GetProgress()
+        try:
+            # object progress is cummulative and is between 0.0 - 1.0
+            # is necessary verify in case is sending the progress
+            # represented by number in case multiprocess, not vtk object
+            if isinstance(obj, float) or isinstance(obj, int):
+                obj_progress = obj
+            else:
+                obj_progress = obj.GetProgress()
 
-        # as it is cummulative, we need to compute the diference, to be
-        # appended on the interface
-        if obj_progress < last_obj_progress[0]:  # current obj != previous obj
-            difference = obj_progress  # 0
-        else:  # current obj == previous obj
-            difference = obj_progress - last_obj_progress[0]
+            # as it is cummulative, we need to compute the diference, to be
+            # appended on the interface
+            if obj_progress < last_obj_progress[0]:  # current obj != previous obj
+                difference = obj_progress  # 0
+            else:  # current obj == previous obj
+                difference = obj_progress - last_obj_progress[0]
 
-        last_obj_progress[0] = obj_progress
+            last_obj_progress[0] = obj_progress
 
-        # final progress status value
-        progress[0] = progress[0] + ratio * difference
-        # Tell GUI to update progress status value
-        if dialog_type == "GaugeProgress":
-            Publisher.sendMessage("Update status in GUI", value=progress[0], label=label)
-        else:
-            if progress[0] >= 99.999:
-                progress[0] = 100
+            # final progress status value
+            progress[0] = progress[0] + ratio * difference
+            # Tell GUI to update progress status value
+            if dialog_type == "GaugeProgress":
+                Publisher.sendMessage("Update status in GUI", value=progress[0], label=label)
+            else:
+                if progress[0] >= 99.999:
+                    progress[0] = 100
 
-            if not (dlg.Update(progress[0], label)):
-                dlg.Close()
-
-        return progress[0]
+                if not (dlg.Update(progress[0], label)):
+                    logger.info("Progress dialog update returned False, closing dialog")
+                    dlg.Close()
+                    
+            logger.debug(f"Updated progress to {progress[0]:.2f}% - {label}")
+            return progress[0]
+        except Exception as e:
+            logger.error(f"Error updating progress: {str(e)}")
+            raise
 
     return UpdateProgress
 
@@ -187,6 +208,8 @@ class Text:
         self.actor = actor
 
         self.SetPosition(const.TEXT_POS_LEFT_UP)
+        
+        logger.debug("Text visualization object created")
 
     def SetColour(self, colour: Sequence[float]) -> None:
         self.property.SetColor(colour)
@@ -384,40 +407,67 @@ def numpy_to_vtkMatrix4x4(affine: "np.ndarray") -> vtkMatrix4x4:
 
 
 # TODO: Use the SurfaceManager >> CreateSurfaceFromFile inside surface.py method instead of duplicating code
+@handle_errors(error_message="Error creating object polydata", category=ErrorCategory.RENDERING)
 def CreateObjectPolyData(filename: str) -> Any:
     """
-    Coil for navigation rendered in volume viewer.
+    Receive a filename and create a vtkPolyData object.
     """
-    filename = utils.decode(filename, const.FS_ENCODE)
-    if filename:
-        if filename.lower().endswith(".stl"):
+    logger.debug(f"Creating polydata object from file: {filename}")
+    
+    try:
+        if not os.path.exists(filename):
+            logger.error(f"File does not exist: {filename}")
+            raise RenderingError(f"File does not exist: {filename}", 
+                             details={"filename": filename})
+            
+        if filename.lower().endswith('.stl'):
+            logger.debug("Using STL reader")
             reader = vtkSTLReader()
-        elif filename.lower().endswith(".ply"):
+            if _has_win32api:
+                reader.SetFileName(win32api.GetShortPathName(filename).encode(const.FS_ENCODE))
+            else:
+                reader.SetFileName(filename.encode(const.FS_ENCODE))
+            reader.Update()
+            return reader.GetOutput()
+            
+        elif filename.lower().endswith('.ply'):
+            logger.debug("Using PLY reader")
             reader = vtkPLYReader()
-        elif filename.lower().endswith(".obj"):
+            if _has_win32api:
+                reader.SetFileName(win32api.GetShortPathName(filename).encode(const.FS_ENCODE))
+            else:
+                reader.SetFileName(filename.encode(const.FS_ENCODE))
+            reader.Update()
+            return reader.GetOutput()
+            
+        elif filename.lower().endswith('.obj'):
+            logger.debug("Using OBJ reader")
             reader = vtkOBJReader()
-        elif filename.lower().endswith(".vtp"):
+            if _has_win32api:
+                reader.SetFileName(win32api.GetShortPathName(filename).encode(const.FS_ENCODE))
+            else:
+                reader.SetFileName(filename.encode(const.FS_ENCODE))
+            reader.Update()
+            return reader.GetOutput()
+            
+        elif filename.lower().endswith('.vtp'):
+            logger.debug("Using XML polydata reader")
             reader = vtkXMLPolyDataReader()
+            if _has_win32api:
+                reader.SetFileName(win32api.GetShortPathName(filename).encode(const.FS_ENCODE))
+            else:
+                reader.SetFileName(filename.encode(const.FS_ENCODE))
+            reader.Update()
+            return reader.GetOutput()
+            
         else:
-            wx.MessageBox(_("File format not reconized by InVesalius"), _("Import surface error"))
-            return
-    else:
-        filename = os.path.join(inv_paths.OBJ_DIR, "magstim_fig8_coil.stl")
-        reader = vtkSTLReader()
-
-    if _has_win32api:
-        obj_name = win32api.GetShortPathName(filename).encode(const.FS_ENCODE)
-    else:
-        obj_name = filename.encode(const.FS_ENCODE)
-
-    reader.SetFileName(obj_name)
-    reader.Update()
-    obj_polydata = reader.GetOutput()
-
-    if obj_polydata.GetNumberOfPoints() == 0:
-        wx.MessageBox(
-            _("InVesalius was not able to import this surface"), _("Import surface error")
-        )
-        obj_polydata = None
-
-    return obj_polydata
+            logger.error(f"Unsupported file format: {filename}")
+            raise RenderingError(f"Unsupported file format: {filename}", 
+                            details={"filename": filename})
+    except Exception as e:
+        if not isinstance(e, RenderingError):
+            logger.error(f"Error creating polydata from file {filename}: {str(e)}")
+            raise RenderingError(f"Error creating polydata from file: {str(e)}", 
+                              details={"filename": filename},
+                              original_exception=e)
+        raise

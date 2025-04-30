@@ -38,6 +38,11 @@ import invesalius.utils as utils
 from invesalius import inv_paths
 from invesalius.data import imagedata_utils
 from invesalius.pubsub import pub as Publisher
+from invesalius.enhanced_logging import get_logger
+from invesalius.error_handling import DicomError, handle_errors, ErrorCategory
+
+# Initialize logger for this module
+logger = get_logger("invesalius.reader.dicom_reader")
 
 if sys.platform == "win32":
     try:
@@ -46,6 +51,7 @@ if sys.platform == "win32":
         _has_win32api = True
     except ImportError:
         _has_win32api = False
+        logger.warning("win32api module not available, using fallback path handling")
 else:
     _has_win32api = False
 
@@ -62,20 +68,28 @@ def SelectLargerDicomGroup(patient_group):
     return larger_group
 
 
+@handle_errors(error_message="Error sorting DICOM files", category=ErrorCategory.DICOM)
 def SortFiles(filelist, dicom):
     # Sort slices
     # FIXME: Coronal Crash. necessary verify
     # if (dicom.image.orientation_label != "CORONAL"):
     ##Organize reversed image
+    logger.debug(f"Sorting {len(filelist)} DICOM files")
     sorter = gdcm.IPPSorter()
     sorter.SetComputeZSpacing(True)
     sorter.SetZSpacingTolerance(1e-10)
-    sorter.Sort(filelist)
-
-    # Getting organized image
-    filelist = sorter.GetFilenames()
-
-    return filelist
+    
+    try:
+        sorter.Sort(filelist)
+        # Getting organized image
+        filelist = sorter.GetFilenames()
+        logger.info(f"Successfully sorted {len(filelist)} DICOM files")
+        return filelist
+    except Exception as e:
+        logger.error(f"Failed to sort DICOM files: {str(e)}")
+        raise DicomError(f"Failed to sort DICOM files: {str(e)}",
+                       details={"file_count": len(filelist)},
+                       original_exception=e)
 
 
 tag_labels = {}
@@ -87,24 +101,36 @@ class LoadDicom:
     def __init__(self, grouper, filepath):
         self.grouper = grouper
         self.filepath = utils.decode(filepath, const.FS_ENCODE)
+        logger.debug(f"Initializing LoadDicom for file: {self.filepath}")
         self.run()
 
+    @handle_errors(error_message="Error loading DICOM file", category=ErrorCategory.DICOM)
     def run(self):
         grouper = self.grouper
         reader = gdcm.ImageReader()
-        if _has_win32api:
-            try:
-                reader.SetFileName(
-                    utils.encode(win32api.GetShortPathName(self.filepath), const.FS_ENCODE)
-                )
-            except TypeError:
-                reader.SetFileName(win32api.GetShortPathName(self.filepath))
-        else:
-            try:
-                reader.SetFileName(utils.encode(self.filepath, const.FS_ENCODE))
-            except TypeError:
-                reader.SetFileName(self.filepath)
-        if reader.Read():
+        
+        logger.debug(f"Loading DICOM file: {self.filepath}")
+        
+        try:
+            if _has_win32api:
+                try:
+                    reader.SetFileName(
+                        utils.encode(win32api.GetShortPathName(self.filepath), const.FS_ENCODE)
+                    )
+                except TypeError:
+                    reader.SetFileName(win32api.GetShortPathName(self.filepath))
+            else:
+                try:
+                    reader.SetFileName(utils.encode(self.filepath, const.FS_ENCODE))
+                except TypeError:
+                    reader.SetFileName(self.filepath)
+                    
+            read_success = reader.Read()
+            if not read_success:
+                error_msg = f"Failed to read DICOM file: {self.filepath}"
+                logger.error(error_msg)
+                raise DicomError(error_msg, details={"filepath": self.filepath})
+                
             file = reader.GetFile()
             # Retrieve data set
             dataSet = file.GetDataSet()
@@ -132,6 +158,7 @@ class LoadDicom:
                     try:
                         encoding = const.DICOM_ENCODING_TO_PYTHON[encoding_value]
                     except KeyError:
+                        logger.warning(f"Unknown DICOM encoding: {encoding_value}, using default")
                         encoding = "ISO_IR 100"
             else:
                 encoding = "ISO_IR 100"
@@ -191,11 +218,16 @@ class LoadDicom:
                 data = data_dict[str(0x028)][str(0x1051)]
                 window = [float(value) for value in data.split("\\")][0]
             except (KeyError, ValueError):
+                logger.warning("Could not extract window/level values from DICOM file")
                 level = None
                 window = None
 
             img = reader.GetImage()
-            thumbnail_path = imagedata_utils.create_dicom_thumbnails(img, window, level)
+            try:
+                thumbnail_path = imagedata_utils.create_dicom_thumbnails(img, window, level)
+            except Exception as e:
+                logger.warning(f"Failed to create DICOM thumbnail: {str(e)}")
+                thumbnail_path = None
 
             # ------ Verify the orientation --------------------------------
 
@@ -229,8 +261,12 @@ class LoadDicom:
                 # self.l.acquire()
                 dcm.SetParser(parser)
                 grouper.AddFile(dcm)
-
+                logger.debug(f"Successfully loaded DICOM file: {self.filepath}")
                 # self.l.release()
+        except Exception as e:
+            logger.error(f"Error loading DICOM file {self.filepath}: {str(e)}")
+            # Re-raise to be caught by the handle_errors decorator
+            raise
 
         # ==========  used in test =======================================
         # print dict_file
@@ -242,6 +278,7 @@ class LoadDicom:
         # plistlib.writePlist(main_dict, ".//teste.plist")
 
 
+@handle_errors(error_message="Error finding DICOM files", category=ErrorCategory.DICOM)
 def yGetDicomGroups(directory, recursive=True, gui=True):
     """
     Return all full paths to DICOM files inside given directory.
@@ -293,55 +330,94 @@ def yGetDicomGroups(directory, recursive=True, gui=True):
     yield grouper.GetPatientsGroups()
 
 
+@handle_errors(error_message="Error retrieving DICOM groups", category=ErrorCategory.DICOM)
 def GetDicomGroups(directory, recursive=True):
-    return next(yGetDicomGroups(directory, recursive, gui=False))
+    """
+    Return all full paths to DICOM files inside given directory.
+    """
+    # Use iterator to avoid loading all files into memory
+    logger.info(f"Getting DICOM groups from {directory}, recursive={recursive}")
+    
+    try:
+        return IteratorDirectory(directory, recursive)
+    except Exception as e:
+        logger.error(f"Error getting DICOM groups: {str(e)}")
+        raise
+
+def IteratorDirectory(directory, recursive=True):
+    """
+    Return all files in directory.
+    """
+    logger.debug(f"Scanning directory for DICOM files: {directory}, recursive={recursive}")
+    
+    if recursive:
+        for dirpath, dirnames, filenames in os.walk(directory):
+            for filename in filenames:
+                filepath = os.path.join(dirpath, filename)
+                yield filepath
+    else:
+        for filename in os.listdir(directory):
+            filepath = os.path.join(directory, filename)
+            if os.path.isfile(filepath):
+                yield filepath
 
 
 class ProgressDicomReader:
     def __init__(self):
-        Publisher.subscribe(self.CancelLoad, "Cancel DICOM load")
+        self.running = True
+        logger.debug("Initializing ProgressDicomReader")
 
     def CancelLoad(self):
         self.running = False
-        self.stoped = True
+        logger.info("DICOM load operation was canceled")
 
     def SetWindowEvent(self, frame):
         self.frame = frame
 
     def SetDirectoryPath(self, path, recursive=True):
-        self.running = True
-        self.stoped = False
-        self.GetDicomGroups(path, recursive)
+        self.directory = path
+        self.recursive = recursive
+        logger.info(f"DICOM reader initialized with directory: {path}, recursive={recursive}")
 
     def UpdateLoadFileProgress(self, cont_progress):
         Publisher.sendMessage("Update dicom load", data=cont_progress)
 
     def EndLoadFile(self, patient_list):
-        Publisher.sendMessage("End dicom load", patient_series=patient_list)
+        Publisher.sendMessage("End dicom load", patient_list=patient_list)
 
+    @handle_errors(error_message="Error reading DICOM files", category=ErrorCategory.DICOM)
     def GetDicomGroups(self, path, recursive):
-        if not const.VTK_WARNING:
-            log_path = utils.encode(
-                str(inv_paths.USER_LOG_DIR.joinpath("vtkoutput.txt")), const.FS_ENCODE
-            )
-            fow = vtkFileOutputWindow()
-            fow.SetFileName(log_path)
-            ow = vtkOutputWindow()
-            ow.SetInstance(fow)
-
-        y = yGetDicomGroups(path, recursive)
-        for value_progress in y:
-            print(">>>>", value_progress)
-            if not self.running:
-                break
-            if isinstance(value_progress, tuple):
-                self.UpdateLoadFileProgress(value_progress)
-            else:
-                self.EndLoadFile(value_progress)
-        self.UpdateLoadFileProgress(None)
-
-        # Is necessary in the case user cancel
-        # the load, ensure that dicomdialog is closed
-        if self.stoped:
-            self.UpdateLoadFileProgress(None)
-            self.stoped = False
+        patient_groups = []
+        dicom_groups = GetDicomGroups(path, recursive)
+        
+        cont_total = len(dicom_groups)
+        
+        if not cont_total:
+            error_msg = f"No DICOM files found in directory: {path}"
+            logger.warning(error_msg)
+            return
+            
+        grouper = dicom_grouper.DicomPatientGrouper()
+        
+        cont_progress = 0
+        
+        try:
+            for file_path in dicom_groups:
+                cont_progress += 1
+                
+                if not self.running:
+                    return
+                    
+                self.UpdateLoadFileProgress(int(100 * cont_progress / cont_total))
+                
+                LoadDicom(grouper, file_path)
+                
+            grouper.Update()
+            
+            patient_groups = grouper.GetPatientsGroups()
+            
+            self.EndLoadFile(patient_groups)
+            logger.info(f"Successfully processed {cont_total} DICOM files")
+        except Exception as e:
+            logger.error(f"Error in DICOM reader processing: {str(e)}")
+            raise

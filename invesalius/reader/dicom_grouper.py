@@ -52,13 +52,12 @@
 # were swapped
 
 import sys
-
+import logging
 import gdcm
 
 if sys.platform == "win32":
     try:
         import win32api
-
         _has_win32api = True
     except ImportError:
         _has_win32api = False
@@ -122,6 +121,10 @@ class DicomGroup:
         # Should be called when user selects this group
         # This list will be used to create the vtkImageData
         # (interpolated)
+        
+        if not self.slices_dict:
+            logging.error("No DICOM files found in the selected folder")
+            return []
 
         if _has_win32api:
             filelist = [

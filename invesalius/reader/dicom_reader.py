@@ -186,7 +186,12 @@ class DicomFileLoader:
             logger.debug(f"Starting to process DICOM file: {self.filepath}")
             self.run()
         except Exception as e:
-            logger.error(f"Error loading DICOM file {self.filepath}: {str(e)}")
+            logger.error(f"Error loading DICOM file {self.filepath}: {str(e)}", exc_info=True)
+            raise DicomError(
+                f"Failed to load DICOM file: {os.path.basename(self.filepath)}",
+                details={"filepath": self.filepath},
+                original_exception=e,
+            )
 
     @handle_errors(
         error_message="Error loading DICOM file",
@@ -277,6 +282,7 @@ class DicomFileLoader:
                         data_dict[group][field] = utils.decode(data[1], encoding)
                     else:
                         data_dict[group][field] = "Invalid Character"
+                        logger.warning(f"Invalid character found in DICOM header field {group}:{field}")
 
             # Iterate through the Data set
             iterator = dataSet.GetDES().begin()
@@ -284,9 +290,6 @@ class DicomFileLoader:
                 dataElement = iterator.next()
                 if not dataElement.IsUndefinedLength():
                     tag = dataElement.GetTag()
-                    #  if (tag.GetGroup() == 0x0009 and tag.GetElement() == 0x10e3) \
-                    #  or (tag.GetGroup() == 0x0043 and tag.GetElement() == 0x1027):
-                    #  continue
                     data = stf.ToStringPair(tag)
                     stag = tag.PrintAsPipeSeparatedString()
 
@@ -302,6 +305,7 @@ class DicomFileLoader:
                         data_dict[group][field] = utils.decode(data[1], encoding, "replace")
                     else:
                         data_dict[group][field] = "Invalid Character"
+                        logger.warning(f"Invalid character found in DICOM dataset field {group}:{field}")
 
             # -------------- To Create DICOM Thumbnail -----------
 
@@ -310,13 +314,15 @@ class DicomFileLoader:
                 level = [float(value) for value in data.split("\\")][0]
                 data = data_dict[str(0x028)][str(0x1051)]
                 window = [float(value) for value in data.split("\\")][0]
-            except (KeyError, ValueError):
+                logger.debug(f"Found window/level values: window={window}, level={level}")
+            except (KeyError, ValueError) as e:
                 level = None
                 window = None
-                logger.debug("No window/level found in DICOM header")
+                logger.debug(f"No window/level found in DICOM header: {str(e)}")
 
             img = reader.GetImage()
             thumbnail_path = imagedata_utils.create_dicom_thumbnails(img, window, level)
+            logger.debug(f"Created DICOM thumbnail at: {thumbnail_path}")
 
             # ------ Verify the orientation --------------------------------
 
@@ -349,33 +355,30 @@ class DicomFileLoader:
                     parser.SetDataImage(dict_file[self.filepath], self.filepath, thumbnail_path)
 
                     dcm = dicom.Dicom()
-                    # self.l.acquire()
                     dcm.SetParser(parser)
                     grouper.AddFile(dcm)
                     logger.info(f"Successfully added DICOM file to grouper: {self.filepath}")
-                    # Try to log current count of files in grouper
                     try:
                         file_count = len(grouper.GetPatientsGroups())
                         logger.info(f"Current patient groups in grouper: {file_count}")
                     except Exception as e:
                         logger.debug(f"Could not get patient group count: {str(e)}")
-                    # self.l.release()
                 except Exception as e:
-                    logger.error(f"Error processing DICOM file {self.filepath}: {str(e)}")
+                    logger.error(f"Error processing DICOM file {self.filepath}: {str(e)}", exc_info=True)
+                    raise DicomError(
+                        f"Failed to process DICOM file: {os.path.basename(self.filepath)}",
+                        details={"filepath": self.filepath, "stage": "parsing"},
+                        original_exception=e,
+                    )
             else:
                 logger.info(f"Skipping DICOMDIR file: {self.filepath}")
         else:
-            logger.warning(f"Failed to read DICOM file: {self.filepath}")
-            # Don't raise an exception here, just continue with the next file
-
-        # ==========  used in test =======================================
-        # print dict_file
-        # main_dict = dict(
-        #                data  = dict_file,
-        #                labels  = tag_labels)
-        # print main_dict
-        # print "\n"
-        # plistlib.writePlist(main_dict, ".//teste.plist")
+            error_msg = f"Failed to read DICOM file: {self.filepath}"
+            logger.error(error_msg)
+            raise DicomError(
+                error_msg,
+                details={"filepath": self.filepath, "stage": "reading"},
+            )
 
 
 @handle_errors(

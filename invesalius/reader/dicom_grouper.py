@@ -56,8 +56,16 @@ import sys
 
 import gdcm
 
-# Import the missing logger
-logger = logging.getLogger(__name__)
+from invesalius.enhanced_logging import get_logger
+from invesalius.error_handling import (
+    DicomError,
+    ErrorCategory,
+    ErrorSeverity,
+    handle_errors,
+)
+
+# Initialize logger
+logger = get_logger("reader.dicom_grouper")
 
 if sys.platform == "win32":
     try:
@@ -79,214 +87,234 @@ class DicomGroup:
     general_index = -1
 
     def __init__(self):
-        DicomGroup.general_index += 1
-        self.index = DicomGroup.general_index
-        # key:
-        # (dicom.patient.name, dicom.acquisition.id_study,
-        #  dicom.acquisition.series_number,
-        #  dicom.image.orientation_label, index)
-        self.key = ()
-        self.title = ""
-        self.slices_dict = {}  # slice_position: Dicom.dicom
-        # IDEA (13/10): Represent internally as dictionary,
-        # externally as list
+        self.slices_dict = {}
         self.nslices = 0
-        self.zspacing = 1
         self.dicom = None
+        self.zspacing = 0
+        self.title = ""
+        self.index = DicomGroup.general_index = DicomGroup.general_index + 1
 
     def AddSlice(self, dicom):
-        if not self.dicom:
-            self.dicom = dicom
-            logger.debug(f"First slice added to group {self.index}, title: {self.title}")
-
-        pos = tuple(dicom.image.position)
-
-        # Case to test: \other\higroma
-        # condition created, if any dicom with the same
-        # position, but 3D, leaving the same series.
-        if "DERIVED" not in dicom.image.type:
-            # if any dicom with the same position
-            if pos not in self.slices_dict.keys():
-                self.slices_dict[pos] = dicom
-                self.nslices += dicom.image.number_of_frames
-                return True
-            else:
-                return False
-        else:
+        """Add a DICOM slice to the group."""
+        try:
             self.slices_dict[dicom.image.number] = dicom
-            self.nslices += dicom.image.number_of_frames
-            return True
+            self.nslices += 1
+            self.dicom = dicom
+            logger.debug(f"Added slice {dicom.image.number} to group {self.index}")
+        except Exception as e:
+            logger.error(f"Error adding slice to group {self.index}: {str(e)}", exc_info=True)
+            raise DicomError(
+                "Failed to add DICOM slice to group",
+                details={"group_index": self.index, "slice_number": dicom.image.number},
+                original_exception=e,
+            )
 
     def GetList(self):
-        # Should be called when user selects this group
-        # This list will be used to create the vtkImageData
-        # (interpolated)
-        return self.slices_dict.values()
-
-    def GetFilenameList(self):
-        # Should be called when user selects this group
-        # This list will be used to create the vtkImageData
-        # (interpolated)
-
-        if not self.slices_dict:
-            logger.error("No DICOM files found in the selected folder")
+        """Get list of DICOM slices for creating vtkImageData."""
+        try:
+            slices = list(self.slices_dict.values())
+            logger.debug(f"Retrieved {len(slices)} slices from group {self.index}")
+            return slices
+        except Exception as e:
+            logger.error(f"Error getting slice list from group {self.index}: {str(e)}", exc_info=True)
             return []
 
-        if _has_win32api:
-            try:
-                filelist = [
-                    win32api.GetShortPathName(dicom.image.file)
-                    for dicom in self.slices_dict.values()
-                ]
-                logger.debug("Using win32api GetShortPathName to get filenames")
-            except Exception as e:
-                logger.warning(f"Error using win32api: {str(e)}")
-                filelist = [dicom.image.file for dicom in self.slices_dict.values()]
-        else:
-            filelist = [dicom.image.file for dicom in self.slices_dict.values()]
-            logger.debug("Using standard filenames")
-
-        # Sort slices using GDCM
-        # if (self.dicom.image.orientation_label != "CORONAL"):
-        # Organize reversed image
-        sorter = gdcm.IPPSorter()
-        sorter.SetComputeZSpacing(True)
-        sorter.SetZSpacingTolerance(1e-10)
+    def GetFilenameList(self):
+        """Get list of DICOM filenames for creating vtkImageData."""
         try:
-            sorter.Sort([utils.encode(i, const.FS_ENCODE) for i in filelist])
-        except TypeError:
-            logger.debug("Using unencoded filenames for sorting")
-            sorter.Sort(filelist)
-        except Exception as e:
-            logger.warning(f"Error during IPPSorter.Sort: {str(e)}")
+            if not self.slices_dict:
+                logger.error(f"No DICOM files found in group {self.index}")
+                return []
 
-        filelist = sorter.GetFilenames()
-        logger.debug(f"Sorted file list contains {len(filelist)} files")
-
-        # Check if z-spacing was computed by GDCM
-        try:
-            computed_spacing = sorter.GetZSpacing()
-            if computed_spacing > 0:
-                logger.debug(f"GDCM computed Z spacing: {computed_spacing}")
+            if _has_win32api:
+                try:
+                    filelist = [
+                        win32api.GetShortPathName(dicom.image.file)
+                        for dicom in self.slices_dict.values()
+                    ]
+                    logger.debug(f"Using win32api GetShortPathName for {len(filelist)} files")
+                except Exception as e:
+                    logger.warning(f"Error using win32api: {str(e)}")
+                    filelist = [dicom.image.file for dicom in self.slices_dict.values()]
             else:
-                logger.debug("GDCM could not compute Z spacing")
-        except:
-            logger.debug("Error retrieving computed Z spacing from GDCM")
+                filelist = [dicom.image.file for dicom in self.slices_dict.values()]
+                logger.debug(f"Using standard filenames for {len(filelist)} files")
 
-        # for breast-CT of koning manufacturing (KBCT)
-        if list(self.slices_dict.values())[0].parser.GetManufacturerName() == "Koning":
-            filelist.sort()
+            # Sort slices using GDCM
+            sorter = gdcm.IPPSorter()
+            sorter.SetComputeZSpacing(True)
+            sorter.SetZSpacingTolerance(1e-10)
+            try:
+                sorter.Sort([utils.encode(i, const.FS_ENCODE) for i in filelist])
+                logger.debug("Successfully sorted files using GDCM IPPSorter")
+            except TypeError:
+                logger.debug("Using unencoded filenames for sorting")
+                sorter.Sort(filelist)
+            except Exception as e:
+                logger.warning(f"Error during IPPSorter.Sort: {str(e)}")
 
-        return filelist
+            filelist = sorter.GetFilenames()
+            logger.debug(f"Final sorted file list contains {len(filelist)} files")
+
+            # Check if z-spacing was computed by GDCM
+            try:
+                computed_spacing = sorter.GetZSpacing()
+                if computed_spacing > 0:
+                    logger.debug(f"GDCM computed Z spacing: {computed_spacing}")
+                else:
+                    logger.warning("GDCM could not compute Z spacing")
+            except Exception as e:
+                logger.warning(f"Error retrieving computed Z spacing from GDCM: {str(e)}")
+
+            # Special handling for breast-CT of koning manufacturing (KBCT)
+            try:
+                if list(self.slices_dict.values())[0].parser.GetManufacturerName() == "Koning":
+                    logger.debug("Detected Koning manufacturer, using simple filename sort")
+                    filelist.sort()
+            except Exception as e:
+                logger.warning(f"Error checking manufacturer name: {str(e)}")
+
+            return filelist
+        except Exception as e:
+            logger.error(f"Error getting filename list from group {self.index}: {str(e)}", exc_info=True)
+            return []
 
     def GetHandSortedList(self):
-        # This will be used to fix problem 1, after merging
-        # single DicomGroups of same study_id and orientation
-        list_ = list(self.slices_dict.values())
-        # dicom = list_[0]
-        # axis = ORIENT_MAP[dicom.image.orientation_label]
-        # list_ = sorted(list_, key = lambda dicom:dicom.image.position[axis])
-        list_ = sorted(list_, key=lambda dicom: dicom.image.number)
-        return list_
+        """Get manually sorted list of DICOM slices."""
+        try:
+            list_ = list(self.slices_dict.values())
+            list_ = sorted(list_, key=lambda dicom: dicom.image.number)
+            logger.debug(f"Hand-sorted {len(list_)} slices by image number")
+            return list_
+        except Exception as e:
+            logger.error(f"Error hand-sorting slices in group {self.index}: {str(e)}", exc_info=True)
+            return []
 
     def UpdateZSpacing(self):
-        list_ = self.GetHandSortedList()
+        """Update Z spacing based on slice positions."""
+        try:
+            list_ = self.GetHandSortedList()
 
-        if len(list_) > 1:
-            dicom = list_[0]
-            axis = ORIENT_MAP[dicom.image.orientation_label]
-            p1 = dicom.image.position[axis]
+            if len(list_) > 1:
+                dicom = list_[0]
+                axis = ORIENT_MAP[dicom.image.orientation_label]
+                p1 = dicom.image.position[axis]
 
-            dicom = list_[1]
-            p2 = dicom.image.position[axis]
+                dicom = list_[1]
+                p2 = dicom.image.position[axis]
 
-            self.zspacing = abs(p1 - p2)
-        else:
+                self.zspacing = abs(p1 - p2)
+                logger.debug(f"Updated Z spacing to {self.zspacing} for group {self.index}")
+            else:
+                self.zspacing = 1
+                logger.debug(f"Set default Z spacing of 1 for group {self.index} (single slice)")
+        except Exception as e:
+            logger.error(f"Error updating Z spacing for group {self.index}: {str(e)}", exc_info=True)
             self.zspacing = 1
 
     def GetDicomSample(self):
-        size = len(self.slices_dict)
-        dicom = self.GetHandSortedList()[size // 2]
-        return dicom
+        """Get a representative DICOM slice from the middle of the group."""
+        try:
+            size = len(self.slices_dict)
+            dicom = self.GetHandSortedList()[size // 2]
+            logger.debug(f"Retrieved DICOM sample from middle of group {self.index} (slice {size//2})")
+            return dicom
+        except Exception as e:
+            logger.error(f"Error getting DICOM sample from group {self.index}: {str(e)}", exc_info=True)
+            return None
 
 
 class PatientGroup:
     def __init__(self):
-        # key:
-        # (dicom.patient.name, dicom.patient.id)
-        self.key = ()
-        self.groups_dict = {}  # group_key: DicomGroup
-        self.nslices = 0
+        self.groups_dict = {}
         self.ngroups = 0
+        self.nslices = 0
         self.dicom = None
 
-    def AddFile(self, dicom, index=0):
-        # Given general DICOM information, we group slices according
-        # to main series information (group_key)
+    def AddFile(self, dicom):
+        """Add a DICOM file to the appropriate group."""
+        try:
+            # Get DICOM group key
+            key = (
+                dicom.acquisition.serie_number,
+                dicom.acquisition.equipment_model,
+                dicom.image.orientation_label,
+            )
+            logger.debug(f"Processing DICOM file with key: {key}")
 
-        # WARN: This was defined after years of experience
-        # (2003-2009), so THINK TWICE before changing group_key
+            # Create new group if it doesn't exist
+            if key not in self.groups_dict:
+                group = DicomGroup()
+                self.groups_dict[key] = group
+                self.ngroups += 1
+                logger.debug(f"Created new group {group.index} for key {key}")
 
-        # Problem 2 is being fixed by the way this method is
-        # implemented, dinamically during new dicom's addition
-        group_key = (
-            dicom.patient.name,
-            dicom.acquisition.id_study,
-            dicom.acquisition.serie_number,
-            dicom.image.orientation_label,
-            index,
-        )  # This will be used to deal with Problem 2
-        if not self.dicom:
+            # Add slice to group
+            self.groups_dict[key].AddSlice(dicom)
+            self.nslices += 1
             self.dicom = dicom
 
-        self.nslices += 1
-        # Does this group exist? Best case ;)
-        if group_key not in self.groups_dict.keys():
-            group = DicomGroup()
-            group.key = group_key
-            group.title = dicom.acquisition.series_description
-            group.AddSlice(dicom)
-            self.ngroups += 1
-            self.groups_dict[group_key] = group
-        # Group exists... Lets try to add slice
-        else:
-            group = self.groups_dict[group_key]
-            slice_added = group.AddSlice(dicom)
-            if not slice_added:
-                # If we're here, then Problem 2 occured
-                # TODO: Optimize recursion
-                self.AddFile(dicom, index + 1)
+            # Update group title
+            group = self.groups_dict[key]
+            group.title = "%d %s %s" % (
+                dicom.acquisition.serie_number,
+                dicom.acquisition.protocol_name,
+                dicom.image.orientation_label,
+            )
+            logger.debug(f"Updated group {group.index} title to: {group.title}")
 
-            # Getting the spacing in the Z axis
-            group.UpdateZSpacing()
+        except Exception as e:
+            logger.error("Error adding DICOM file to patient group", exc_info=True)
+            raise DicomError(
+                "Failed to add DICOM file to patient group",
+                details={"serie_number": dicom.acquisition.serie_number},
+                original_exception=e,
+            )
 
     def Update(self):
-        # Ideally, AddFile would be sufficient for splitting DICOM
-        # files into groups (series). However, this does not work for
-        # acquisitions / equipments and manufacturers.
+        """Update groups to handle special cases."""
+        try:
+            # Check if Problem 1 occurs (n groups with 1 slice each)
+            is_there_problem_1 = False
+            logger.debug(f"Checking for Problem 1: nslices={self.nslices}, ngroups={len(self.groups_dict)}")
+            
+            if (self.nslices == len(self.groups_dict)) and (self.nslices > 1):
+                is_there_problem_1 = True
+                logger.warning("Detected Problem 1: Each group contains only one slice")
 
-        # Although DICOM is a protocol, each one uses its fields in a
-        # different manner
+            # Fix Problem 1
+            if is_there_problem_1:
+                logger.info("Attempting to fix Problem 1")
+                self.groups_dict = self.FixProblem1(self.groups_dict)
+                logger.info(f"After fixing Problem 1: {len(self.groups_dict)} groups remain")
 
-        # Check if Problem 1 occurs (n groups with 1 slice each)
-        is_there_problem_1 = False
-        utils.debug("n slice %d" % self.nslices)
-        utils.debug("len %d" % len(self.groups_dict))
-        if (self.nslices == len(self.groups_dict)) and (self.nslices > 1):
-            is_there_problem_1 = True
-
-        # Fix Problem 1
-        if is_there_problem_1:
-            utils.debug("Problem1")
-            self.groups_dict = self.FixProblem1(self.groups_dict)
+        except Exception as e:
+            logger.error("Error updating patient groups", exc_info=True)
+            raise DicomError(
+                "Failed to update patient groups",
+                details={"ngroups": len(self.groups_dict), "nslices": self.nslices},
+                original_exception=e,
+            )
 
     def GetGroups(self):
-        glist = self.groups_dict.values()
-        glist = sorted(glist, key=lambda group: group.title, reverse=True)
-        return glist
+        """Get sorted list of DICOM groups."""
+        try:
+            glist = self.groups_dict.values()
+            glist = sorted(glist, key=lambda group: group.title, reverse=True)
+            logger.debug(f"Retrieved {len(glist)} sorted groups")
+            return glist
+        except Exception as e:
+            logger.error("Error getting sorted groups", exc_info=True)
+            return []
 
     def GetDicomSample(self):
-        return self.dicom
+        """Get a representative DICOM file."""
+        try:
+            logger.debug("Retrieved DICOM sample from patient group")
+            return self.dicom
+        except Exception as e:
+            logger.error("Error getting DICOM sample from patient group", exc_info=True)
+            return None
 
     def FixProblem1(self, dict):
         """

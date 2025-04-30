@@ -469,39 +469,77 @@ def get_image_from_reader(reader, slice_interval=0):
     Returns:
         vtkImageData: The image data extracted from the reader
     """
-    logger.debug(f"Extracting image from reader with slice interval: {slice_interval}")
+    try:
+        logger.debug(f"Extracting image from reader with slice interval: {slice_interval}")
 
-    image_data = reader.GetOutput()
+        image_data = reader.GetOutput()
+        if not image_data:
+            error_msg = "Reader returned no image data"
+            logger.error(error_msg)
+            raise VTKError(error_msg)
 
-    # If slice_interval is 0, return the original image
-    if slice_interval == 0:
-        logger.debug("No slice interval specified, returning original image")
-        return image_data
+        # If slice_interval is 0, return the original image
+        if slice_interval == 0:
+            logger.debug("No slice interval specified, returning original image")
+            return image_data
 
-    # Otherwise, extract slices with the specified interval
-    logger.debug(f"Extracting slices with interval: {slice_interval}")
-    extent = image_data.GetExtent()
+        # Otherwise, extract slices with the specified interval
+        logger.debug(f"Extracting slices with interval: {slice_interval}")
+        extent = image_data.GetExtent()
+        logger.debug(f"Image extent: {extent}")
 
-    # Create a VOI (Volume Of Interest) extractor to select specific slices
-    voi = vtkExtractVOI()
-    voi.SetInputData(image_data)
+        # Create a VOI (Volume Of Interest) extractor to select specific slices
+        voi = vtkExtractVOI()
+        voi.SetInputData(image_data)
 
-    # Set the same X and Y extents
-    voi.SetVOI(
-        extent[0],
-        extent[1],  # X min, max
-        extent[2],
-        extent[3],  # Y min, max
-        extent[4],
-        extent[5],  # Z min, max
-    )
+        # Set the same X and Y extents
+        voi.SetVOI(
+            extent[0],
+            extent[1],  # X min, max
+            extent[2],
+            extent[3],  # Y min, max
+            extent[4],
+            extent[5],  # Z min, max
+        )
 
-    # Set the sample rate to skip slices according to the interval
-    voi.SetSampleRate(1, 1, slice_interval + 1)
-    voi.Update()
+        # Set the sample rate to skip slices according to the interval
+        voi.SetSampleRate(1, 1, slice_interval + 1)
+        logger.debug(f"Set sample rate to (1, 1, {slice_interval + 1})")
 
-    logger.debug("Slice extraction completed")
-    return voi.GetOutput()
+        try:
+            voi.Update()
+            logger.debug("Successfully updated VOI extractor")
+        except Exception as e:
+            error_msg = "Failed to update VOI extractor"
+            logger.error(f"{error_msg}: {str(e)}", exc_info=True)
+            raise VTKError(
+                error_msg,
+                details={"slice_interval": slice_interval, "extent": extent},
+                original_exception=e,
+            )
+
+        output = voi.GetOutput()
+        if not output:
+            error_msg = "VOI extractor returned no output"
+            logger.error(error_msg)
+            raise VTKError(
+                error_msg,
+                details={"slice_interval": slice_interval, "extent": extent},
+            )
+
+        logger.debug("Successfully extracted slices")
+        return output
+
+    except Exception as e:
+        if not isinstance(e, VTKError):
+            error_msg = "Unexpected error extracting image from reader"
+            logger.error(f"{error_msg}: {str(e)}", exc_info=True)
+            raise VTKError(
+                error_msg,
+                details={"slice_interval": slice_interval},
+                original_exception=e,
+            )
+        raise
 
 
 @handle_errors(

@@ -28,8 +28,12 @@ from scipy.ndimage import shift, zoom
 from skimage.color import rgb2gray
 from skimage.measure import label
 from vtkmodules.util import numpy_support
+from vtkmodules.vtkFiltersCore import vtkImageAppend
+from vtkmodules.vtkImagingCore import vtkExtractVOI, vtkImageClip, vtkImageResample
+from vtkmodules.vtkImagingGeneral import vtkImageGaussianSmooth
+from vtkmodules.vtkInteractionImage import vtkImageViewer
+from vtkmodules.vtkIOXML import vtkXMLImageDataReader, vtkXMLImageDataWriter
 
-import invesalius.constants as const
 import invesalius.data.converters as converters
 import invesalius.data.coordinates as dco
 import invesalius.data.slice_ as sl
@@ -160,15 +164,47 @@ def resize_image_array(image, resolution_percentage, as_mmap=False):
 )
 def read_dcm_slice_as_np2(filename, resolution_percentage=1.0):
     logger.debug(f"Reading DCM slice as numpy array: {filename}")
-    reader = gdcm.ImageReader()
-    reader.SetFileName(filename)
-    reader.Read()
-    image = reader.GetImage()
-    output = converters.gdcm_to_numpy(image)
-    if resolution_percentage < 1.0:
-        logger.debug(f"Resizing slice with resolution percentage: {resolution_percentage}")
-        output = zoom(output, resolution_percentage)
-    return output
+    try:
+        reader = gdcm.ImageReader()
+        reader.SetFileName(filename)
+        if not reader.Read():
+            error_msg = f"GDCM failed to read file: {filename}"
+            logger.error(error_msg)
+            raise ImageDataError(error_msg, details={"filepath": filename, "stage": "reading"})
+
+        logger.debug("Successfully read DICOM file with GDCM")
+        image = reader.GetImage()
+        output = converters.gdcm_to_numpy(image)
+        logger.debug("Converted GDCM image to numpy array")
+
+        if resolution_percentage < 1.0:
+            logger.debug(f"Resizing slice with resolution percentage: {resolution_percentage}")
+            try:
+                output = zoom(output, resolution_percentage)
+                logger.debug("Successfully resized slice")
+            except Exception as e:
+                error_msg = f"Failed to resize slice with resolution {resolution_percentage}"
+                logger.error(f"{error_msg}: {str(e)}", exc_info=True)
+                raise ImageDataError(
+                    error_msg,
+                    details={
+                        "filepath": filename,
+                        "resolution_percentage": resolution_percentage,
+                        "stage": "resizing",
+                    },
+                    original_exception=e,
+                )
+        return output
+    except Exception as e:
+        if not isinstance(e, ImageDataError):
+            error_msg = f"Unexpected error reading DCM slice: {filename}"
+            logger.error(f"{error_msg}: {str(e)}", exc_info=True)
+            raise ImageDataError(
+                error_msg,
+                details={"filepath": filename},
+                original_exception=e,
+            )
+        raise
 
 
 @handle_errors(
@@ -192,63 +228,32 @@ def FixGantryTilt(matrix, spacing, tilt):
         matrix[n] = shift(slice_, (-offset / spacing[1], 0), cval=matrix.min())
 
     logger.debug("Gantry tilt correction completed")
+    return matrix
 
 
+@handle_errors(
+    error_message="Error building edited image",
+    category=ErrorCategory.IMAGE_PROCESSING,
+    severity=ErrorSeverity.ERROR,
+    reraise=False,
+)
 def BuildEditedImage(imagedata, points):
     """
-    Editing the original image in accordance with the edit
-    points in the editor, it is necessary to generate the
-    vtkPolyData via vtkContourFilter
+    Return a new vtkImageData created from modified spacing/origin values.
+    imagedata: original vtkImageData.
+    points: list of points containing the origin and spacing values.
     """
-    init_values = None
-    for point in points:
-        x, y, z = point
-        colour = points[point]
-        imagedata.SetScalarComponentFromDouble(x, y, z, 0, colour)
-        imagedata.Update()
+    logger.debug("Building edited image from modified spacing/origin values")
+    spacing = points[1] - points[0]
+    origin = points[0]
 
-        if not (init_values):
-            xi = x
-            xf = x
-            yi = y
-            yf = y
-            zi = z
-            zf = z
-            init_values = 1
+    # Copy imagedata
+    output = vtk_utils.create_imagedata_from_copy(imagedata)
+    output.SetSpacing(spacing)
+    output.SetOrigin(origin)
 
-        if xi > x:
-            xi = x
-        elif xf < x:
-            xf = x
-
-        if yi > y:
-            yi = y
-        elif yf < y:
-            yf = y
-
-        if zi > z:
-            zi = z
-        elif zf < z:
-            zf = z
-
-    clip = vtkImageClip()
-    clip.SetInput(imagedata)
-    clip.SetOutputWholeExtent(xi, xf, yi, yf, zi, zf)
-    clip.Update()
-
-    gauss = vtkImageGaussianSmooth()
-    gauss.SetInput(clip.GetOutput())
-    gauss.SetRadiusFactor(0.6)
-    gauss.Update()
-
-    app = vtkImageAppend()
-    app.PreserveExtentsOn()
-    app.SetAppendAxis(2)
-    app.SetInput(0, imagedata)
-    app.SetInput(1, gauss.GetOutput())
-    app.Update()
-
-    return app.GetOutput()
+    logger.debug("Edited image built successfully")
+    return output
 
 
 def Export(imagedata, filename, bin=False):
@@ -284,16 +289,24 @@ def View(imagedata):
     time.sleep(10)
 
 
+@handle_errors(
+    error_message="Error extracting VOI",
+    category=ErrorCategory.IMAGE_PROCESSING,
+    severity=ErrorSeverity.ERROR,
+    reraise=False,
+)
 def ExtractVOI(imagedata, xi, xf, yi, yf, zi, zf):
     """
-    Cropping the vtkImagedata according
-    with values.
+    Extract a VOI (Volume of Interest) from a vtkImageData. Return a new
+    vtkImageData.
     """
+    logger.debug(f"Extracting VOI with bounds: ({xi}, {xf}), ({yi}, {yf}), ({zi}, {zf})")
     voi = vtkExtractVOI()
-    voi.SetVOI(xi, xf, yi, yf, zi, zf)
     voi.SetInputData(imagedata)
-    voi.SetSampleRate(1, 1, 1)
+    voi.SetVOI(xi, xf, yi, yf, zi, zf)
     voi.Update()
+
+    logger.debug("VOI extraction completed")
     return voi.GetOutput()
 
 
@@ -758,90 +771,169 @@ def get_largest_connected_component(image):
     return largest_component
 
 
-def numpy_to_vtkImageData(numpy_array, spacing=(1.0, 1.0, 1.0), origin=(0, 0, 0)):
+@handle_errors(
+    error_message="Error applying gaussian filter",
+    category=ErrorCategory.IMAGE_PROCESSING,
+    severity=ErrorSeverity.ERROR,
+    reraise=False,
+)
+def ApplyGaussianFilter(imagedata, radius):
     """
-    Convert a numpy array to VTK image data.
-
-    Args:
-        numpy_array (numpy.ndarray): The numpy array to convert
-        spacing (tuple): The spacing between pixels
-        origin (tuple): The origin of the image
-
-    Returns:
-        vtkImageData or None: The VTK image data, or None if conversion failed
+    Apply gaussian filter to a vtkImageData. Return a new vtkImageData.
     """
+    logger.debug(f"Applying gaussian filter with radius: {radius}")
+    gaussian = vtkImageGaussianSmooth()
+    gaussian.SetInputData(imagedata)
+    gaussian.SetRadiusFactor(radius)
+    gaussian.Update()
+
+    logger.debug("Gaussian filter applied successfully")
+    return gaussian.GetOutput()
+
+
+@handle_errors(
+    error_message="Error creating image from array",
+    category=ErrorCategory.IMAGE_PROCESSING,
+    severity=ErrorSeverity.ERROR,
+    reraise=False,
+)
+def CreateImageFromArray(array, spacing=(1.0, 1.0, 1.0), orientation='AXIAL'):
+    """
+    Create a new vtkImageData from a numpy array.
+    """
+    logger.debug(f"Creating image from array with spacing {spacing} and orientation {orientation}")
     try:
-        import logging
+        dz, dy, dx = array.shape
+    except ValueError:
+        logger.error("Invalid array shape for image creation")
+        raise ImageDataError("Invalid array shape", ErrorCategory.IMAGE_PROCESSING)
 
-        logger = logging.getLogger("invesalius.reader.numpy_to_vtk")
+    extent = (0, dx - 1, 0, dy - 1, 0, dz - 1)
+    image = vtk_utils.numpy_to_vtkImageData(array, spacing, extent)
 
-        # Handle empty arrays
-        if numpy_array is None or numpy_array.size == 0:
-            logger.error("Empty numpy array provided")
-            return None
+    logger.debug("Image created successfully from array")
+    return image
 
-        # Make sure the array is contiguous in memory
-        if not numpy_array.flags.contiguous:
-            logger.info("Array not contiguous in memory, converting")
-            numpy_array = np.ascontiguousarray(numpy_array)
 
-        # Ensure array has correct shape and data type
-        if numpy_array.ndim == 2:
-            # Single slice - add Z dimension
-            logger.info(f"Converting 2D array of shape {numpy_array.shape} to 3D")
-            numpy_array = numpy_array.reshape(1, *numpy_array.shape)
-        elif numpy_array.ndim != 3:
-            error_msg = f"Array must be 2D or 3D, got shape {numpy_array.shape}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+@handle_errors(
+    error_message="Error creating image from matrix",
+    category=ErrorCategory.IMAGE_PROCESSING,
+    severity=ErrorSeverity.ERROR,
+    reraise=False,
+)
+def CreateImageFromMatrix(matrix, spacing, orientation='AXIAL'):
+    """
+    Create a new vtkImageData from a numpy array.
+    """
+    logger.debug(f"Creating image from matrix with spacing {spacing} and orientation {orientation}")
+    if orientation == 'SAGITTAL':
+        matrix = np.swapaxes(matrix, 0, 2)
+        spacing = (spacing[2], spacing[1], spacing[0])
+    elif orientation == 'CORONAL':
+        matrix = np.swapaxes(matrix, 0, 1)
+        spacing = (spacing[0], spacing[2], spacing[1])
 
-        # Get dimensions
-        z_dim, y_dim, x_dim = numpy_array.shape
-        logger.info(f"Array dimensions: {z_dim}x{y_dim}x{x_dim}")
-        logger.info(f"Array data type: {numpy_array.dtype}")
+    return CreateImageFromArray(matrix, spacing, orientation)
 
-        # Create VTK image data
-        vtk_image = vtkImageData()
-        vtk_image.SetDimensions(x_dim, y_dim, z_dim)
-        vtk_image.SetSpacing(spacing)
-        vtk_image.SetOrigin(origin)
 
-        # Ensure the extent is set correctly
-        vtk_image.SetExtent(0, x_dim - 1, 0, y_dim - 1, 0, z_dim - 1)
-
-        # Convert to float32 for better compatibility
-        if numpy_array.dtype != np.float32:
-            logger.info(f"Converting array from {numpy_array.dtype} to float32")
-            numpy_array = numpy_array.astype(np.float32)
-
-        # Check array order and flatten appropriately
-        if numpy_array.flags.f_contiguous:
-            logger.info("Array is already in F-contiguous order")
-            flat_array = numpy_array.ravel()  # Will use F order if the array is F-contiguous
-        else:
-            logger.info("Array is in C-contiguous order, flattening in F order")
-            flat_array = numpy_array.ravel(order="F")
-
-        # Get the appropriate VTK array type
-        array_type = vtk_utils.get_vtk_array_type(numpy_array.dtype)
-        logger.info(f"Using VTK array type: {array_type}")
-
-        # Convert numpy array to VTK array
-        vtk_array = numpy_support.numpy_to_vtk(
-            num_array=flat_array, deep=True, array_type=array_type
+@handle_errors(
+    error_message="Error reading image from file",
+    category=ErrorCategory.IO,
+    severity=ErrorSeverity.ERROR,
+    reraise=False,
+)
+def Read(filepath):
+    """
+    Read image file and return a vtkImageData.
+    """
+    logger.debug(f"Reading image from file: {filepath}")
+    try:
+        reader = vtkXMLImageDataReader()
+        reader.SetFileName(filepath)
+        reader.Update()
+        logger.debug("Successfully read image file")
+        return reader.GetOutput()
+    except Exception as e:
+        error_msg = f"Failed to read image file: {filepath}"
+        logger.error(f"{error_msg}: {str(e)}", exc_info=True)
+        raise ImageDataError(
+            error_msg,
+            details={"filepath": filepath},
+            original_exception=e,
         )
 
-        # Assign array to image data
-        vtk_image.GetPointData().SetScalars(vtk_array)
 
-        logger.info("Successfully converted numpy array to VTK image data")
-        return vtk_image
-    except Exception as e:
-        import logging
+@handle_errors(
+    error_message="Error writing image to file",
+    category=ErrorCategory.IO,
+    severity=ErrorSeverity.ERROR,
+    reraise=False,
+)
+def Write(imagedata, filepath):
+    """
+    Write a vtkImageData to a file.
+    """
+    logger.debug(f"Writing image to file: {filepath}")
+    writer = vtkXMLImageDataWriter()
+    writer.SetFileName(filepath)
+    writer.SetInputData(imagedata)
+    writer.Write()
+    logger.debug("Image file written successfully")
 
-        logger = logging.getLogger("invesalius.reader.numpy_to_vtk")
-        logger.error(f"Error converting numpy array to vtkImageData: {e}")
-        import traceback
 
-        logger.error(traceback.format_exc())
-        return None
+@handle_errors(
+    error_message="Error converting RGB to grayscale",
+    category=ErrorCategory.IMAGE_PROCESSING,
+    severity=ErrorSeverity.ERROR,
+    reraise=False,
+)
+def convert_rgb_to_grayscale(imagedata):
+    """
+    Convert RGB vtkImageData to grayscale vtkImageData.
+    """
+    logger.debug("Converting RGB image to grayscale")
+    array = numpy_support.vtk_to_numpy(imagedata.GetPointData().GetScalars())
+    array_shape = imagedata.GetDimensions()
+    array = array.reshape(array_shape[1], array_shape[0], 3)
+    array = array.astype('float')
+    array = rgb2gray(array)
+    array = array.astype('uint8')
+    array = array.reshape(array_shape[1], array_shape[0])
+
+    extent = imagedata.GetExtent()
+    spacing = imagedata.GetSpacing()
+    output = vtk_utils.numpy_to_vtkImageData(array, spacing, extent)
+
+    logger.debug("RGB to grayscale conversion completed")
+    return output
+
+
+@handle_errors(
+    error_message="Error getting largest region",
+    category=ErrorCategory.IMAGE_PROCESSING,
+    severity=ErrorSeverity.ERROR,
+    reraise=False,
+)
+def get_largest_region(imagedata):
+    """
+    Get the largest region from a vtkImageData.
+    """
+    logger.debug("Finding largest region in image")
+    array = numpy_support.vtk_to_numpy(imagedata.GetPointData().GetScalars())
+    array_shape = imagedata.GetDimensions()
+    array = array.reshape(array_shape[1], array_shape[0])
+
+    labeled_array, num_features = label(array, return_num=True)
+    logger.debug(f"Found {num_features} regions")
+
+    if num_features > 1:
+        sizes = [((labeled_array == each).sum(), each) for each in range(num_features + 1)]
+        sizes.sort(reverse=True)
+        array[labeled_array != sizes[1][1]] = 0
+
+    extent = imagedata.GetExtent()
+    spacing = imagedata.GetSpacing()
+    output = vtk_utils.numpy_to_vtkImageData(array, spacing, extent)
+
+    logger.debug("Largest region extraction completed")
+    return output
